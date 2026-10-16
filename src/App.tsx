@@ -441,7 +441,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex gap-6">
+      <div className="flex-1 w-full max-w-[1920px] mx-auto px-3 sm:px-4 lg:px-6 py-5 flex gap-4 xl:gap-6">
         {/* Desktop Sidebar */}
         <aside className="hidden lg:block w-64 shrink-0 bg-white border border-slate-200 rounded-xl p-2 h-[calc(100vh-6.5rem)] sticky top-20 shadow-xs">
           <Sidebar

@@ -307,6 +307,7 @@ CREATE TABLE public.important_contacts (
     sr_no INT NOT NULL,
     particulars TEXT NOT NULL,
     name TEXT DEFAULT '',
+    dob TEXT DEFAULT '',
     mobile TEXT DEFAULT '',
     email TEXT DEFAULT '',
     address TEXT DEFAULT '',

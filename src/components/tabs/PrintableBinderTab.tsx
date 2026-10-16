@@ -275,7 +275,7 @@ export const PrintableBinderTab: React.FC<PrintableBinderTabProps> = ({
 
         {/* Footer */}
         <div className="pt-6 border-t border-slate-200 text-center text-xs text-slate-400">
-          Generated from KutumbVault · Family Financial Dossier · Confidential Personal Document
+          Generated from Vault · Family Financial Dossier · Confidential Personal Document
         </div>
       </div>
     </div>

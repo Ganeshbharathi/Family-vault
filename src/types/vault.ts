@@ -11,6 +11,7 @@ export interface ImportantContact {
   srNo: number;
   particulars: string; // e.g., 'Self', 'Spouse', 'MOM', 'Family Doctor', etc.
   name: string;
+  dob?: string; // Date of birth e.g. '1995-05-15' or '15-May-1995'
   mobile: string;
   email: string;
   address?: string;
