@@ -12,7 +12,7 @@ import { Navbar } from './components/Navbar.tsx';
 import { Sidebar, TabKey } from './components/Sidebar.tsx';
 import { GlobalSearchModal } from './components/GlobalSearchModal.tsx';
 import { SupabaseGuideModal } from './components/modals/SupabaseGuideModal.tsx';
-import { testSupabaseConnection, pullVaultFromSupabase } from './services/supabaseClient.ts';
+import { testSupabaseConnection, pullVaultFromSupabase, pushVaultToSupabase } from './services/supabaseClient.ts';
 
 import { OverviewTab } from './components/tabs/OverviewTab.tsx';
 import { ContactsTab } from './components/tabs/ContactsTab.tsx';
@@ -118,19 +118,15 @@ export default function App() {
   const handleSyncDataToSupabase = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch('/api/vault/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vault),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('Successfully synced all vault tables to Supabase!');
+      const result = await pushVaultToSupabase(vault);
+      if (result.success) {
+        showToast(result.message || 'Successfully synced all vault tables to Supabase!');
+        setBrowserConnected(true);
       } else {
-        showToast(`Sync failed: ${data.error || 'Check Supabase logs'}`);
+        showToast(`Sync failed: ${result.message}`);
       }
     } catch (err: any) {
-      showToast(`Error connecting to server: ${err.message}`);
+      showToast(`Error connecting to Supabase: ${err.message}`);
     } finally {
       setIsSyncing(false);
     }
@@ -151,24 +147,39 @@ export default function App() {
             base64Data,
           };
 
-          const res = await fetch('/api/documents/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-
-          if (!res.ok) {
-            throw new Error('Upload failed');
+          let attachment: DocumentAttachment | null = null;
+          try {
+            const res = await fetch('/api/documents/upload', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+              const resData = await res.json();
+              attachment = resData.attachment;
+            }
+          } catch {
+            // Backend not present (e.g. static hosting on GitHub Pages / Cloudflare Pages)
           }
 
-          const resData = await res.json();
-          const attachment: DocumentAttachment = resData.attachment;
+          if (!attachment) {
+            attachment = {
+              id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              fileName: file.name,
+              originalName: file.name,
+              fileSize: file.size,
+              mimeType: file.type || 'application/octet-stream',
+              storagePath: `local/${docId}/${file.name}`,
+              fileUrl: base64Data,
+              uploadedAt: new Date().toISOString(),
+            };
+          }
 
           // Update local state
           setVault((prev) => ({
             ...prev,
             documents: prev.documents.map((d) =>
-              d.id === docId ? { ...d, attachment } : d
+              d.id === docId ? { ...d, attachment: attachment! } : d
             ),
           }));
 

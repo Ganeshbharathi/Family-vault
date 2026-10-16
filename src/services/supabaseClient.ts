@@ -17,23 +17,37 @@ export async function getClientConfig(): Promise<{ url: string; anonKey: string 
     return { url: localUrl, anonKey: localKey };
   }
 
-  // Fetch from server /api/config
+  // Check Vite build-time environment variables (e.g. set in Cloudflare Pages / GitHub Actions)
+  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
+  if (envUrl && envKey) {
+    return {
+      url: localUrl || envUrl,
+      anonKey: localKey || envKey,
+    };
+  }
+
+  // Determine smart default URL based on current host
+  const isPuppylabHost = typeof window !== 'undefined' && window.location.hostname.includes('puppylab.cc');
+  const defaultUrl = isPuppylabHost ? 'https://sup.puppylab.cc' : 'http://100.81.91.59:8000';
+
+  // Fetch from server /api/config if hosted with Express
   try {
     const res = await fetch('/api/config');
     if (res.ok) {
       const data = await res.json();
       return {
-        url: localUrl || data.supabaseUrl || 'http://100.81.91.59:8000',
-        anonKey: localKey || data.supabaseAnonKey || '',
+        url: localUrl || envUrl || data.supabaseUrl || defaultUrl,
+        anonKey: localKey || envKey || data.supabaseAnonKey || '',
       };
     }
   } catch (err) {
-    console.warn('Could not fetch server config, using fallback:', err);
+    // Statically hosted (GitHub Pages, Cloudflare Pages, etc.)
   }
 
   return {
-    url: localUrl || 'http://100.81.91.59:8000',
-    anonKey: localKey || '',
+    url: localUrl || envUrl || defaultUrl,
+    anonKey: localKey || envKey || '',
   };
 }
 
