@@ -15,11 +15,15 @@ import {
   UploadCloud,
   DownloadCloud,
   Key,
+  Eye,
+  EyeOff,
+  ExternalLink,
 } from 'lucide-react';
 import { SUPABASE_SQL_SCHEMA, PROXMOX_SETUP_GUIDE_STEPS } from '../../data/supabaseSchema.ts';
 import {
   getClientConfig,
   saveClientConfig,
+  cleanSupabaseUrl,
   testSupabaseConnection,
   pushVaultToSupabase,
   pullVaultFromSupabase,
@@ -47,15 +51,20 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
   const [isPushing, setIsPushing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
 
-  const [supabaseUrl, setSupabaseUrl] = useState('http://100.81.91.59:8000');
+  const [supabaseUrl, setSupabaseUrl] = useState(
+    typeof window !== 'undefined' && window.location.hostname.includes('puppylab.cc')
+      ? 'https://sup.puppylab.cc'
+      : 'http://100.81.91.59:8000'
+  );
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<{
     connected: boolean;
     message: string;
     checked: boolean;
   }>({
     connected: false,
-    message: 'Testing connection to Tailscale node...',
+    message: 'Checking Supabase connection...',
     checked: false,
   });
 
@@ -65,18 +74,32 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
       getClientConfig().then((cfg) => {
         if (cfg.url) setSupabaseUrl(cfg.url);
         if (cfg.anonKey) setSupabaseAnonKey(cfg.anonKey);
-        // Automatically test connection
-        handleTestConnection(cfg.url, cfg.anonKey);
+
+        if (cfg.url && cfg.anonKey) {
+          handleTestConnection(cfg.url, cfg.anonKey);
+        } else {
+          setConnectionStatus({
+            connected: false,
+            message: !cfg.anonKey
+              ? 'Anon Key required: Enter your Supabase Anon Key in Connection Parameters below.'
+              : 'Testing connection...',
+            checked: true,
+          });
+        }
       });
     }
   }, [isOpen]);
 
   const handleTestConnection = async (urlToTest?: string, keyToTest?: string) => {
     setIsChecking(true);
-    if (urlToTest !== undefined && keyToTest !== undefined) {
-      saveClientConfig(urlToTest, keyToTest);
+    const targetUrl = urlToTest !== undefined ? urlToTest : supabaseUrl;
+    const targetKey = keyToTest !== undefined ? keyToTest : supabaseAnonKey;
+
+    if (targetUrl) {
+      saveClientConfig(targetUrl, targetKey || '');
     }
-    const res = await testSupabaseConnection();
+
+    const res = await testSupabaseConnection({ url: targetUrl, anonKey: targetKey });
     setConnectionStatus({
       connected: res.ok,
       message: res.message,
@@ -86,14 +109,44 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
   };
 
   const handleSaveConfig = async () => {
-    saveClientConfig(supabaseUrl, supabaseAnonKey);
-    await handleTestConnection(supabaseUrl, supabaseAnonKey);
-    showToast('Supabase configuration saved!');
+    const cleanUrl = cleanSupabaseUrl(supabaseUrl);
+    const cleanKey = (supabaseAnonKey || '').trim();
+
+    if (!cleanUrl) {
+      showToast('Please enter your Supabase URL (e.g. https://sup.puppylab.cc)');
+      return;
+    }
+    if (!cleanKey) {
+      showToast('Please paste your Supabase Anon Key');
+      return;
+    }
+
+    saveClientConfig(cleanUrl, cleanKey);
+    await handleTestConnection(cleanUrl, cleanKey);
+    showToast('Supabase configuration saved & tested!');
   };
 
   const handlePushData = async () => {
+    const cleanUrl = cleanSupabaseUrl(supabaseUrl);
+    const cleanKey = (supabaseAnonKey || '').trim();
+
+    if (!cleanUrl) {
+      showToast('Please enter your Supabase URL (e.g. https://sup.puppylab.cc)');
+      return;
+    }
+    if (!cleanKey) {
+      showToast('Please paste your Supabase Anon Key in Connection Parameters below first!');
+      setConnectionStatus({
+        connected: false,
+        message: 'Anon Key missing: Please paste your Supabase Anon Key in Connection Parameters below and click "Save & Re-test".',
+        checked: true,
+      });
+      return;
+    }
+
     setIsPushing(true);
-    const res = await pushVaultToSupabase(vault);
+    saveClientConfig(cleanUrl, cleanKey);
+    const res = await pushVaultToSupabase(vault, { url: cleanUrl, anonKey: cleanKey });
     setIsPushing(false);
     if (res.success) {
       showToast('All family data successfully pushed to Supabase!');
@@ -104,18 +157,42 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
       });
     } else {
       showToast(`Push failed: ${res.message}`);
+      setConnectionStatus({
+        connected: false,
+        message: `Push failed: ${res.message}`,
+        checked: true,
+      });
     }
   };
 
   const handlePullData = async () => {
+    const cleanUrl = cleanSupabaseUrl(supabaseUrl);
+    const cleanKey = (supabaseAnonKey || '').trim();
+
+    if (!cleanUrl || !cleanKey) {
+      showToast('Please enter your Supabase URL and Anon Key first.');
+      return;
+    }
+
     setIsPulling(true);
-    const res = await pullVaultFromSupabase();
+    saveClientConfig(cleanUrl, cleanKey);
+    const res = await pullVaultFromSupabase({ url: cleanUrl, anonKey: cleanKey });
     setIsPulling(false);
     if (res.success && res.data) {
       onUpdateVault(res.data);
       showToast('Successfully refreshed vault from Supabase database!');
+      setConnectionStatus({
+        connected: true,
+        message: 'Successfully pulled latest records from Supabase.',
+        checked: true,
+      });
     } else {
       showToast(`Pull failed: ${res.message || 'Could not fetch data'}`);
+      setConnectionStatus({
+        connected: false,
+        message: `Pull failed: ${res.message || 'Could not fetch data'}`,
+        checked: true,
+      });
     }
   };
 
@@ -263,44 +340,96 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
           </div>
 
           {/* Connection Details Config Box */}
-          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3">
-            <h3 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-              <Key className="w-4 h-4 text-indigo-600" />
-              Connection Parameters (Tailscale Direct Route)
-            </h3>
+          <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/30 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                <Key className="w-4 h-4 text-indigo-600" />
+                Connection Parameters (Cloudflare Tunnel / Direct HTTPS)
+              </h3>
+              <span className="text-[10px] font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-semibold">
+                Client-to-Supabase
+              </span>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  Supabase URL (Tailscale IP & Port)
+                  Supabase Backend URL
                 </label>
                 <input
                   type="text"
                   value={supabaseUrl}
                   onChange={(e) => setSupabaseUrl(e.target.value)}
-                  placeholder="http://100.81.91.59:8000"
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="https://sup.puppylab.cc"
+                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
                 />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Cloudflare Tunnel domain routing to your Ubuntu Supabase instance.
+                </span>
               </div>
               <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  Anon / Public API Key
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Supabase Anon / Public Key
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowKey(!showKey)}
+                    className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                  >
+                    {showKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                    <span>{showKey ? 'Hide' : 'Reveal'}</span>
+                  </button>
+                </div>
                 <input
-                  type="password"
+                  type={showKey ? 'text' : 'password'}
                   value={supabaseAnonKey}
                   onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                  placeholder="eyJhbGciOi..."
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
                 />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Safe public key for PostgREST & Kong. Saved locally in your browser.
+                </span>
               </div>
             </div>
-            <div className="flex justify-end">
+
+            {/* Quick Helper for finding Anon Key */}
+            <div className="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-900 space-y-1">
+              <div className="font-semibold flex items-center gap-1.5 text-amber-800">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                Where to get your Supabase Anon Key:
+              </div>
+              <ul className="list-disc list-inside space-y-0.5 text-[10.5px] text-amber-900">
+                <li>
+                  <strong>From Studio UI:</strong> Open{' '}
+                  <a
+                    href="https://sup.puppylab.cc/project/default/settings/api"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline text-indigo-700 font-mono inline-flex items-center gap-0.5"
+                  >
+                    https://sup.puppylab.cc/project/default/settings/api <ExternalLink className="w-2.5 h-2.5" />
+                  </a>{' '}
+                  &rarr; copy the <strong>anon / public</strong> key.
+                </li>
+                <li>
+                  <strong>From Ubuntu Terminal:</strong> Run{' '}
+                  <code className="bg-amber-100/80 px-1.5 py-0.5 rounded font-mono text-amber-950">
+                    cat /opt/kutumbvault/docker/.env | grep ANON_KEY
+                  </code>
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={handleSaveConfig}
-                className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors"
+                className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs flex items-center gap-1.5"
               >
-                Save & Re-test
+                <Check className="w-3.5 h-3.5" />
+                <span>Save Configuration & Re-test</span>
               </button>
             </div>
           </div>

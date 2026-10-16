@@ -9,12 +9,21 @@ let cachedClient: SupabaseClient | null = null;
 let cachedUrl = '';
 let cachedKey = '';
 
+export function cleanSupabaseUrl(rawUrl: string): string {
+  let url = (rawUrl || '').trim();
+  url = url.replace(/\/+$/, '');
+  // Strip /project/default or /project/* if user pasted the Studio UI link
+  url = url.replace(/\/project\/[a-zA-Z0-9_-]+$/, '');
+  url = url.replace(/\/project$/, '');
+  return url;
+}
+
 export async function getClientConfig(): Promise<{ url: string; anonKey: string }> {
   // Check local storage overrides first
   const localUrl = localStorage.getItem(STORAGE_URL_KEY);
   const localKey = localStorage.getItem(STORAGE_ANON_KEY);
   if (localUrl && localKey) {
-    return { url: localUrl, anonKey: localKey };
+    return { url: cleanSupabaseUrl(localUrl), anonKey: localKey.trim() };
   }
 
   // Check Vite build-time environment variables (e.g. set in Cloudflare Pages / GitHub Actions)
@@ -22,13 +31,16 @@ export async function getClientConfig(): Promise<{ url: string; anonKey: string 
   const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
   if (envUrl && envKey) {
     return {
-      url: localUrl || envUrl,
-      anonKey: localKey || envKey,
+      url: cleanSupabaseUrl(localUrl || envUrl),
+      anonKey: (localKey || envKey).trim(),
     };
   }
 
   // Determine smart default URL based on current host
-  const isPuppylabHost = typeof window !== 'undefined' && window.location.hostname.includes('puppylab.cc');
+  const isPuppylabHost = typeof window !== 'undefined' && (
+    window.location.hostname.includes('puppylab.cc') ||
+    window.location.hostname === 'vault.puppylab.cc'
+  );
   const defaultUrl = isPuppylabHost ? 'https://sup.puppylab.cc' : 'http://100.81.91.59:8000';
 
   // Fetch from server /api/config if hosted with Express
@@ -37,42 +49,57 @@ export async function getClientConfig(): Promise<{ url: string; anonKey: string 
     if (res.ok) {
       const data = await res.json();
       return {
-        url: localUrl || envUrl || data.supabaseUrl || defaultUrl,
-        anonKey: localKey || envKey || data.supabaseAnonKey || '',
+        url: cleanSupabaseUrl(localUrl || envUrl || data.supabaseUrl || defaultUrl),
+        anonKey: (localKey || envKey || data.supabaseAnonKey || '').trim(),
       };
     }
-  } catch (err) {
+  } catch {
     // Statically hosted (GitHub Pages, Cloudflare Pages, etc.)
   }
 
   return {
-    url: localUrl || envUrl || defaultUrl,
-    anonKey: localKey || envKey || '',
+    url: cleanSupabaseUrl(localUrl || envUrl || defaultUrl),
+    anonKey: (localKey || envKey || '').trim(),
   };
 }
 
 export function saveClientConfig(url: string, anonKey: string) {
-  if (url) localStorage.setItem(STORAGE_URL_KEY, url);
-  if (anonKey) localStorage.setItem(STORAGE_ANON_KEY, anonKey);
+  const cleanedUrl = cleanSupabaseUrl(url);
+  const cleanedKey = (anonKey || '').trim();
+  if (cleanedUrl) localStorage.setItem(STORAGE_URL_KEY, cleanedUrl);
+  if (cleanedKey) localStorage.setItem(STORAGE_ANON_KEY, cleanedKey);
   cachedClient = null; // reset client to re-init
+  cachedUrl = '';
+  cachedKey = '';
 }
 
-export async function getSupabaseClient(): Promise<SupabaseClient | null> {
-  const { url, anonKey } = await getClientConfig();
-  if (!url || !anonKey) {
+export async function getSupabaseClient(customConfig?: { url?: string; anonKey?: string }): Promise<SupabaseClient | null> {
+  let targetUrl = '';
+  let targetKey = '';
+
+  if (customConfig?.url && customConfig?.anonKey) {
+    targetUrl = cleanSupabaseUrl(customConfig.url);
+    targetKey = customConfig.anonKey.trim();
+  } else {
+    const cfg = await getClientConfig();
+    targetUrl = cfg.url;
+    targetKey = cfg.anonKey;
+  }
+
+  if (!targetUrl || !targetKey) {
     return null;
   }
 
-  if (cachedClient && cachedUrl === url && cachedKey === anonKey) {
+  if (cachedClient && cachedUrl === targetUrl && cachedKey === targetKey) {
     return cachedClient;
   }
 
   try {
-    cachedClient = createClient(url, anonKey, {
+    cachedClient = createClient(targetUrl, targetKey, {
       auth: { persistSession: false },
     });
-    cachedUrl = url;
-    cachedKey = anonKey;
+    cachedUrl = targetUrl;
+    cachedKey = targetKey;
     return cachedClient;
   } catch (err) {
     console.error('Failed to initialize browser Supabase client:', err);
@@ -80,47 +107,79 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
   }
 }
 
-export async function testSupabaseConnection(): Promise<{
+export async function testSupabaseConnection(customConfig?: { url?: string; anonKey?: string }): Promise<{
   ok: boolean;
   message: string;
   tableCount?: number;
 }> {
-  const client = await getSupabaseClient();
+  if (customConfig?.url && customConfig?.anonKey) {
+    saveClientConfig(customConfig.url, customConfig.anonKey);
+  }
+
+  const { url, anonKey } = customConfig?.url && customConfig?.anonKey
+    ? { url: cleanSupabaseUrl(customConfig.url), anonKey: customConfig.anonKey.trim() }
+    : await getClientConfig();
+
+  if (!url) {
+    return {
+      ok: false,
+      message: 'Supabase URL is missing. Enter https://sup.puppylab.cc below.',
+    };
+  }
+  if (!anonKey) {
+    return {
+      ok: false,
+      message: 'Supabase Anon Key is missing. Paste your Anon Key in Connection Parameters below and click Save.',
+    };
+  }
+
+  const client = await getSupabaseClient({ url, anonKey });
   if (!client) {
     return {
       ok: false,
-      message: 'Supabase URL or Anon Key is missing. Please configure them in Settings.',
+      message: 'Failed to initialize Supabase client. Check URL and Anon Key.',
     };
   }
 
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-  const { url } = await getClientConfig();
   const isTargetHttp = url.startsWith('http://');
 
   try {
-    // Try querying family_members
+    // Try querying family_members table
     const { data, error } = await client.from('family_members').select('id').limit(1);
     if (error) {
+      if (error.code === 'PGRST301' || error.message.toLowerCase().includes('jwt') || error.message.toLowerCase().includes('apikey')) {
+        return {
+          ok: false,
+          message: `Authentication error: ${error.message}. Double-check that your Anon Key is correct.`,
+        };
+      }
+      if (error.message.includes('relation "family_members" does not exist') || error.message.includes('relation "public.family_members" does not exist')) {
+        return {
+          ok: false,
+          message: 'Connected to Supabase, but SQL tables do not exist yet! Click "SQL Schema Reference" -> Copy SQL and run it in Supabase SQL Editor.',
+        };
+      }
       return {
         ok: false,
-        message: `Query failed: ${error.message}. Ensure the SQL schema has been executed in Supabase SQL Editor.`,
+        message: `Supabase query error: ${error.message}`,
       };
     }
 
     return {
       ok: true,
-      message: 'Successfully connected directly to Supabase over Tailscale!',
+      message: `Connected successfully to ${url}! Table 'family_members' is accessible.`,
     };
   } catch (err: any) {
     if (isHttps && isTargetHttp) {
       return {
         ok: false,
-        message: 'Browser blocked connection (Mixed Content: HTTPS app calling HTTP Supabase). In Chrome: click the Tune icon next to the URL -> Site settings -> Insecure content -> Allow, then refresh.',
+        message: 'Browser blocked connection (Mixed Content: HTTPS app calling HTTP Supabase). Use https://sup.puppylab.cc.',
       };
     }
     return {
       ok: false,
-      message: `Failed to reach Supabase: ${err.message || 'Network error'}. Make sure Tailscale is connected.`,
+      message: `Network error reaching ${url}: ${err.message || 'CORS / unreachable'}. Verify your Cloudflare Tunnel is running and pointing to port 8000.`,
     };
   }
 }
@@ -128,13 +187,19 @@ export async function testSupabaseConnection(): Promise<{
 /**
  * Push all vault data directly to Supabase tables
  */
-export async function pushVaultToSupabase(vault: VaultState): Promise<{
+export async function pushVaultToSupabase(
+  vault: VaultState,
+  customConfig?: { url?: string; anonKey?: string }
+): Promise<{
   success: boolean;
   message: string;
   details?: Record<string, string>;
 }> {
-  // 1. First attempt: Use same-origin backend API (/api/vault/sync)
-  // This runs directly on the server next to Supabase, bypassing all browser CORS restrictions
+  if (customConfig?.url && customConfig?.anonKey) {
+    saveClientConfig(customConfig.url, customConfig.anonKey);
+  }
+
+  // 1. First attempt: If running fullstack with backend Express server (/api/vault/sync)
   try {
     const res = await fetch('/api/vault/sync', {
       method: 'POST',
@@ -148,14 +213,34 @@ export async function pushVaultToSupabase(vault: VaultState): Promise<{
         message: json.message || 'All 10 sections pushed to Supabase successfully!',
       };
     }
-  } catch (apiErr) {
-    console.warn('Backend sync failed, falling back to direct browser client:', apiErr);
+  } catch {
+    // Normal for static hosting (Cloudflare Pages, GitHub Pages)
   }
 
   // 2. Second attempt: Direct client connection via @supabase/supabase-js
-  const client = await getSupabaseClient();
+  const cfg = customConfig?.url && customConfig?.anonKey
+    ? { url: cleanSupabaseUrl(customConfig.url), anonKey: customConfig.anonKey.trim() }
+    : await getClientConfig();
+
+  if (!cfg.url) {
+    return {
+      success: false,
+      message: 'Supabase URL is missing. Please set your Supabase URL (e.g. https://sup.puppylab.cc) in the modal.',
+    };
+  }
+  if (!cfg.anonKey) {
+    return {
+      success: false,
+      message: 'Supabase Anon Key is missing. Please paste your anon key in Connection Parameters and click Save.',
+    };
+  }
+
+  const client = await getSupabaseClient(cfg);
   if (!client) {
-    return { success: false, message: 'Could not connect to Supabase via server or client.' };
+    return {
+      success: false,
+      message: `Could not initialize Supabase client for ${cfg.url}. Please verify URL and Anon Key.`,
+    };
   }
 
   const results: Record<string, string> = {};
@@ -372,11 +457,17 @@ export async function pushVaultToSupabase(vault: VaultState): Promise<{
 /**
  * Fetch all vault data from Supabase tables
  */
-export async function pullVaultFromSupabase(): Promise<{
+export async function pullVaultFromSupabase(
+  customConfig?: { url?: string; anonKey?: string }
+): Promise<{
   success: boolean;
   data?: VaultState;
   message?: string;
 }> {
+  if (customConfig?.url && customConfig?.anonKey) {
+    saveClientConfig(customConfig.url, customConfig.anonKey);
+  }
+
   // 1. Try server-side endpoint first (immune to CORS)
   try {
     const res = await fetch('/api/vault');
@@ -390,14 +481,25 @@ export async function pullVaultFromSupabase(): Promise<{
         };
       }
     }
-  } catch (apiErr) {
-    console.warn('Backend /api/vault fetch failed, trying direct client:', apiErr);
+  } catch {
+    // Normal for static hosting
   }
 
   // 2. Fallback to client query
-  const client = await getSupabaseClient();
+  const cfg = customConfig?.url && customConfig?.anonKey
+    ? { url: cleanSupabaseUrl(customConfig.url), anonKey: customConfig.anonKey.trim() }
+    : await getClientConfig();
+
+  if (!cfg.url) {
+    return { success: false, message: 'Supabase URL is missing.' };
+  }
+  if (!cfg.anonKey) {
+    return { success: false, message: 'Supabase Anon Key is missing. Paste your Anon Key in Connection Parameters.' };
+  }
+
+  const client = await getSupabaseClient(cfg);
   if (!client) {
-    return { success: false, message: 'Supabase client not initialized.' };
+    return { success: false, message: `Could not connect to Supabase at ${cfg.url}.` };
   }
 
   try {

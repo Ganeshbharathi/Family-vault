@@ -124,9 +124,13 @@ export default function App() {
         setBrowserConnected(true);
       } else {
         showToast(`Sync failed: ${result.message}`);
+        if (result.message.toLowerCase().includes('missing') || result.message.toLowerCase().includes('initialize')) {
+          setIsSupabaseGuideOpen(true);
+        }
       }
     } catch (err: any) {
       showToast(`Error connecting to Supabase: ${err.message}`);
+      setIsSupabaseGuideOpen(true);
     } finally {
       setIsSyncing(false);
     }
