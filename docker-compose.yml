@@ -1,0 +1,11 @@
+services:
+  kutumbvault:
+    build: .
+    container_name: kutumbvault
+    restart: unless-stopped
+    network_mode: "host"
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
