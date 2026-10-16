@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { VaultState, FinancialDocument, DocumentAttachment } from './types/vault.ts';
 import { INITIAL_VAULT_DATA } from './data/initialVaultData.ts';
 import { exportVaultToCsv, checkExpiryStatus } from './utils/vaultCalculations.ts';
@@ -12,7 +12,13 @@ import { Navbar } from './components/Navbar.tsx';
 import { Sidebar, TabKey } from './components/Sidebar.tsx';
 import { GlobalSearchModal } from './components/GlobalSearchModal.tsx';
 import { SupabaseGuideModal } from './components/modals/SupabaseGuideModal.tsx';
-import { testSupabaseConnection, pullVaultFromSupabase, pushVaultToSupabase } from './services/supabaseClient.ts';
+import {
+  testSupabaseConnection,
+  pullVaultFromSupabase,
+  pushVaultToSupabase,
+  syncSectionToSupabase,
+  SyncSectionKey,
+} from './services/supabaseClient.ts';
 
 import { OverviewTab } from './components/tabs/OverviewTab.tsx';
 import { ContactsTab } from './components/tabs/ContactsTab.tsx';
@@ -59,13 +65,17 @@ export default function App() {
     url: null,
   });
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedTime, setLastSavedTime] = useState<string>('');
+  const prevVaultRef = useRef<VaultState>(vault);
+  const isInitialMount = useRef(true);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Check direct browser Supabase connection over Tailscale
+  // Check direct browser Supabase connection over Tailscale / Cloudflare Tunnel
   const [browserConnected, setBrowserConnected] = useState(false);
 
   const checkDirectSupabase = useCallback(async () => {
@@ -77,6 +87,9 @@ export default function App() {
         if (pullRes.success && pullRes.data) {
           // If Supabase has data, use it
           setVault(pullRes.data);
+          prevVaultRef.current = pullRes.data;
+          setSyncStatus('saved');
+          setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
         }
       }
     } catch {
@@ -99,19 +112,96 @@ export default function App() {
     return null;
   }, []);
 
-  // On mount: check both direct browser connection (Tailscale) and backend
+  // On mount: check direct browser connection and backend
   useEffect(() => {
     checkDirectSupabase();
     checkSupabaseStatus();
   }, [checkDirectSupabase, checkSupabaseStatus]);
 
-  // Sync to local storage whenever vault state changes
+  // Intelligent real-time auto-sync to Supabase on any field update
   useEffect(() => {
+    // 1. Immediately persist to localStorage (offline safety)
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(vault));
     } catch {
       // Ignore quota error
     }
+
+    // Skip auto-sync on initial component mount
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      prevVaultRef.current = vault;
+      return;
+    }
+
+    // 2. Detect which sections changed
+    const prev = prevVaultRef.current;
+    const changedSections: Array<{ key: SyncSectionKey; items: any[] }> = [];
+
+    if (prev.familyMembers !== vault.familyMembers) {
+      changedSections.push({ key: 'familyMembers', items: vault.familyMembers });
+    }
+    if (prev.contacts !== vault.contacts) {
+      changedSections.push({ key: 'contacts', items: vault.contacts });
+    }
+    if (prev.documents !== vault.documents) {
+      changedSections.push({ key: 'documents', items: vault.documents });
+    }
+    if (prev.onlineAccounts !== vault.onlineAccounts) {
+      changedSections.push({ key: 'onlineAccounts', items: vault.onlineAccounts });
+    }
+    if (prev.investments !== vault.investments) {
+      changedSections.push({ key: 'investments', items: vault.investments });
+    }
+    if (prev.insurances !== vault.insurances) {
+      changedSections.push({ key: 'insurances', items: vault.insurances });
+    }
+    if (prev.lockers !== vault.lockers) {
+      changedSections.push({ key: 'lockers', items: vault.lockers });
+    }
+    if (prev.cards !== vault.cards) {
+      changedSections.push({ key: 'cards', items: vault.cards });
+    }
+    if (prev.properties !== vault.properties) {
+      changedSections.push({ key: 'properties', items: vault.properties });
+    }
+    if (prev.liabilities !== vault.liabilities) {
+      changedSections.push({ key: 'liabilities', items: vault.liabilities });
+    }
+    if (prev.passwords !== vault.passwords) {
+      changedSections.push({ key: 'passwords', items: vault.passwords });
+    }
+
+    prevVaultRef.current = vault;
+
+    if (changedSections.length === 0) return;
+
+    setSyncStatus('saving');
+
+    // Debounce the Supabase database write by 1200ms so typing in fields doesn't flood the DB
+    const timer = setTimeout(async () => {
+      let anyError = false;
+      for (const { key, items } of changedSections) {
+        try {
+          const res = await syncSectionToSupabase(key, items);
+          if (!res.success) {
+            anyError = true;
+          }
+        } catch {
+          anyError = true;
+        }
+      }
+
+      if (!anyError) {
+        setSyncStatus('saved');
+        setBrowserConnected(true);
+        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      } else {
+        setSyncStatus('error');
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
   }, [vault]);
 
   // Sync data to Supabase
@@ -324,6 +414,8 @@ export default function App() {
         onResetData={handleResetData}
         onOpenSupabaseGuide={() => setIsSupabaseGuideOpen(true)}
         supabaseConnected={browserConnected || supabaseStatus.connected}
+        syncStatus={syncStatus}
+        lastSavedTime={lastSavedTime}
         mobileMenuOpen={mobileMenuOpen}
         onToggleMobileMenu={() => setMobileMenuOpen((prev) => !prev)}
         lastUpdated={vault.currentDate}

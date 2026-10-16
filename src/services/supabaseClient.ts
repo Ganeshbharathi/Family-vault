@@ -184,8 +184,353 @@ export async function testSupabaseConnection(customConfig?: { url?: string; anon
   }
 }
 
+// Section table mapping configuration with candidate fallback names
+export const SECTION_TABLE_MAPPINGS = {
+  familyMembers: ['family_members'],
+  contacts: ['important_contacts'],
+  documents: ['financial_documents'],
+  onlineAccounts: ['online_accounts'],
+  investments: ['investment_accounts', 'investment_details'],
+  insurances: ['insurance_policies'],
+  lockers: ['locker_details', 'safe_lockers'],
+  cards: ['card_details', 'bank_cards'],
+  properties: ['property_details', 'properties'],
+  liabilities: ['liability_details', 'liabilities'],
+  passwords: ['online_passwords'],
+} as const;
+
+export type SyncSectionKey = keyof typeof SECTION_TABLE_MAPPINGS;
+
 /**
- * Push all vault data directly to Supabase tables
+ * Smart upsert with candidate table names and column adaptability
+ */
+async function smartUpsert(
+  client: SupabaseClient,
+  tableCandidates: readonly string[],
+  rows: Record<string, any>[]
+): Promise<{ success: boolean; tableName: string; message: string; error?: string }> {
+  if (!rows || rows.length === 0) {
+    return { success: true, tableName: tableCandidates[0], message: '0 rows (empty)' };
+  }
+
+  let lastError = '';
+
+  for (const table of tableCandidates) {
+    // 1. Try upserting original rows
+    const { error } = await client.from(table).upsert(rows);
+
+    if (!error) {
+      return { success: true, tableName: table, message: `${rows.length} rows synced to ${table}` };
+    }
+
+    lastError = error.message;
+
+    // 2. Handle missing 'mobile' column on important_contacts (e.g. named phone or missing)
+    if (error.message.includes("'mobile' column") || error.message.includes("column \"mobile\"")) {
+      const fallbackRows = rows.map((r) => {
+        const copy = { ...r };
+        delete copy.mobile;
+        copy.phone = r.mobile || '';
+        return copy;
+      });
+      const retryRes = await client.from(table).upsert(fallbackRows);
+      if (!retryRes.error) {
+        return { success: true, tableName: table, message: `${rows.length} rows synced to ${table} (mapped mobile->phone)` };
+      }
+
+      // Try omitting mobile entirely
+      const strippedRows = rows.map((r) => {
+        const copy = { ...r };
+        delete copy.mobile;
+        delete copy.phone;
+        return copy;
+      });
+      const strippedRes = await client.from(table).upsert(strippedRows);
+      if (!strippedRes.error) {
+        return { success: true, tableName: table, message: `${rows.length} rows synced to ${table} (without mobile column)` };
+      }
+      lastError = strippedRes.error?.message || lastError;
+    }
+
+    // 3. Handle card_number vs cardnumber variations for card_details / bank_cards
+    if (table === 'card_details' || table === 'bank_cards') {
+      const cardMappedRows = rows.map((r) => ({
+        ...r,
+        card_number: r.cardNumber || r.cardnumber || '',
+        cardnumber: r.cardNumber || r.cardnumber || '',
+      }));
+      const retryCard = await client.from(table).upsert(cardMappedRows);
+      if (!retryCard.error) {
+        return { success: true, tableName: table, message: `${rows.length} rows synced to ${table}` };
+      }
+    }
+
+    // If table doesn't exist in schema cache, try next candidate
+    const isTableMissing =
+      error.message.includes('Could not find the table') ||
+      error.message.includes('relation') ||
+      (error as any).code === '42P01' ||
+      (error as any).code === 'PGRST205';
+
+    if (isTableMissing) {
+      continue;
+    }
+  }
+
+  return {
+    success: false,
+    tableName: tableCandidates[0],
+    message: `Error: ${lastError}`,
+    error: lastError,
+  };
+}
+
+/**
+ * Query table with candidate fallbacks
+ */
+async function smartSelect(
+  client: SupabaseClient,
+  tableCandidates: readonly string[],
+  orderCol?: string
+): Promise<{ data: any[] | null; tableName?: string }> {
+  for (const table of tableCandidates) {
+    try {
+      let query = client.from(table).select('*');
+      if (orderCol) {
+        query = query.order(orderCol, { ascending: true });
+      }
+      const res = await query;
+      if (!res.error && res.data) {
+        return { data: res.data, tableName: table };
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return { data: null };
+}
+
+/**
+ * Transform front-end objects to database rows for a specific section
+ */
+export function transformSectionToRows(section: SyncSectionKey, items: any[]): Record<string, any>[] {
+  switch (section) {
+    case 'familyMembers':
+      return items.map((m) => ({
+        id: m.id,
+        category: m.category,
+        name: m.name,
+        relationship: m.relationship,
+        notes: m.notes || '',
+      }));
+
+    case 'contacts':
+      return items.map((c) => ({
+        id: c.id,
+        sr_no: c.srNo,
+        particulars: c.particulars,
+        name: c.name || '',
+        mobile: c.mobile || '',
+        email: c.email || '',
+        address: c.address || '',
+        remarks: c.remarks || '',
+      }));
+
+    case 'documents':
+      return items.map((d) => ({
+        id: d.id,
+        sr_no: d.srNo,
+        document_name: d.documentName,
+        document_number: d.documentNumber || '',
+        physical_location: d.physicalLocation || '',
+        virtual_location: d.virtualLocation || '',
+        remarks: d.remarks || '',
+        expiry_date: d.expiryDate || '',
+        status_note: d.statusNote || '',
+      }));
+
+    case 'onlineAccounts':
+      return items.map((o) => ({
+        id: o.id,
+        sr_no: o.srNo,
+        platform: o.platform,
+        email: o.email,
+        mobile: o.mobile || '',
+        account_id: o.accountId || '',
+        remarks: o.remarks || '',
+      }));
+
+    case 'investments':
+      return items.map((i) => ({
+        id: i.id,
+        sr_no: i.srNo,
+        investment_type: i.investmentType,
+        platform: i.platform,
+        account_holder_name: i.accountHolderName,
+        agent_or_advisor: i.agentOrAdvisor || '',
+        account_number: i.accountNumber,
+        nominee: i.nominee || '',
+        maturity_date: i.maturityDate || '',
+        linked_bank: i.linkedBank || '',
+        reg_mobile: i.regMobile || '',
+        reg_email: i.regEmail || '',
+        remarks: i.remarks || '',
+      }));
+
+    case 'insurances':
+      return items.map((p) => ({
+        id: p.id,
+        sr_no: p.srNo,
+        type: p.type,
+        policy_name: p.policyName,
+        policy_number: p.policyNumber,
+        covered_person: p.coveredPerson || '',
+        amount_insured: p.amountInsured || '',
+        nominee: p.nominee || '',
+        advisor: p.advisor || '',
+        valid_till: p.validTill || '',
+        premium_amount: p.premiumAmount || '',
+        premium_due_date: p.premiumDueDate || '',
+        remarks: p.remarks || '',
+      }));
+
+    case 'lockers':
+      return items.map((l) => ({
+        id: l.id,
+        sr_no: l.srNo,
+        bank_and_branch: l.bankAndBranch,
+        account_number: l.accountNumber || '',
+        locker_number: l.lockerNumber,
+        in_name_of: l.inNameOf || '',
+        nominee: l.nominee || '',
+        code_or_remarks: l.codeOrRemarks || '',
+      }));
+
+    case 'cards':
+      return items.map((c) => ({
+        id: c.id,
+        sr_no: c.srNo,
+        name_on_card: c.nameOnCard,
+        card_type: c.cardType,
+        cardnumber: c.cardNumber || '',
+        card_number: c.cardNumber || '',
+        linked_account: c.linkedAccount || '',
+        reg_mobile: c.regMobile || '',
+        valid_till: c.validTill || '',
+        remarks: c.remarks || '',
+      }));
+
+    case 'properties':
+      return items.map((p) => ({
+        id: p.id,
+        sr_no: p.srNo,
+        property_name: p.propertyName,
+        property_area: p.propertyArea || '',
+        owners: p.owners || '',
+        registration_number: p.registrationNumber || '',
+        nominee: p.nominee || '',
+        remarks: p.remarks || '',
+      }));
+
+    case 'liabilities':
+      return items.map((l) => ({
+        id: l.id,
+        sr_no: l.srNo,
+        bank_or_lender: l.bankOrLender,
+        liability_type: l.liabilityType,
+        amount: l.amount,
+        terms: l.terms || '',
+        remarks: l.remarks || '',
+      }));
+
+    case 'passwords':
+      return items.map((w) => ({
+        id: w.id,
+        sr_no: w.srNo,
+        login_kind: w.loginKind,
+        person_aware: w.personAware,
+        remarks: w.remarks || '',
+        instructions: w.instructions || '',
+      }));
+
+    default:
+      return [];
+  }
+}
+
+/**
+ * Automatically sync a single section to Supabase in the background
+ */
+export async function syncSectionToSupabase(
+  section: SyncSectionKey,
+  items: any[]
+): Promise<{ success: boolean; message: string; tableName?: string }> {
+  const client = await getSupabaseClient();
+  if (!client) {
+    return { success: false, message: 'Supabase client not configured.' };
+  }
+
+  const candidates = SECTION_TABLE_MAPPINGS[section];
+  const rows = transformSectionToRows(section, items);
+  const result = await smartUpsert(client, candidates, rows);
+
+  return {
+    success: result.success,
+    message: result.message,
+    tableName: result.tableName,
+  };
+}
+
+/**
+ * Automatically sync a single record modification to Supabase
+ */
+export async function syncSingleRecord(
+  section: SyncSectionKey,
+  record: any
+): Promise<{ success: boolean; message: string }> {
+  const client = await getSupabaseClient();
+  if (!client) {
+    return { success: false, message: 'Supabase client not configured.' };
+  }
+
+  const candidates = SECTION_TABLE_MAPPINGS[section];
+  const rows = transformSectionToRows(section, [record]);
+  const result = await smartUpsert(client, candidates, rows);
+
+  return {
+    success: result.success,
+    message: result.message,
+  };
+}
+
+/**
+ * Automatically delete a single record from Supabase
+ */
+export async function deleteSingleRecord(
+  section: SyncSectionKey,
+  recordId: string
+): Promise<{ success: boolean; message: string }> {
+  const client = await getSupabaseClient();
+  if (!client) {
+    return { success: false, message: 'Supabase client not configured.' };
+  }
+
+  const candidates = SECTION_TABLE_MAPPINGS[section];
+  let lastError = '';
+
+  for (const table of candidates) {
+    const { error } = await client.from(table).delete().eq('id', recordId);
+    if (!error) {
+      return { success: true, message: `Record deleted from ${table}` };
+    }
+    lastError = error.message;
+  }
+
+  return { success: false, message: lastError || 'Failed to delete record' };
+}
+
+/**
+ * Push all vault data directly to Supabase tables (Full sync fallback)
  */
 export async function pushVaultToSupabase(
   vault: VaultState,
@@ -199,25 +544,6 @@ export async function pushVaultToSupabase(
     saveClientConfig(customConfig.url, customConfig.anonKey);
   }
 
-  // 1. First attempt: If running fullstack with backend Express server (/api/vault/sync)
-  try {
-    const res = await fetch('/api/vault/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(vault || INITIAL_VAULT_DATA),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      return {
-        success: true,
-        message: json.message || 'All 10 sections pushed to Supabase successfully!',
-      };
-    }
-  } catch {
-    // Normal for static hosting (Cloudflare Pages, GitHub Pages)
-  }
-
-  // 2. Second attempt: Direct client connection via @supabase/supabase-js
   const cfg = customConfig?.url && customConfig?.anonKey
     ? { url: cleanSupabaseUrl(customConfig.url), anonKey: customConfig.anonKey.trim() }
     : await getClientConfig();
@@ -246,193 +572,32 @@ export async function pushVaultToSupabase(
   const results: Record<string, string> = {};
 
   try {
-    // 1. Family Members
-    if (vault.familyMembers?.length) {
-      const rows = vault.familyMembers.map((m) => ({
-        id: m.id,
-        category: m.category,
-        name: m.name,
-        relationship: m.relationship,
-        notes: m.notes || '',
-      }));
-      const { error } = await client.from('family_members').upsert(rows);
-      results.family_members = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
+    const sectionsToSync: Array<{ key: SyncSectionKey; label: string; items: any[] }> = [
+      { key: 'familyMembers', label: 'family_members', items: vault.familyMembers || [] },
+      { key: 'contacts', label: 'important_contacts', items: vault.contacts || [] },
+      { key: 'documents', label: 'financial_documents', items: vault.documents || [] },
+      { key: 'onlineAccounts', label: 'online_accounts', items: vault.onlineAccounts || [] },
+      { key: 'investments', label: 'investment_accounts', items: vault.investments || [] },
+      { key: 'insurances', label: 'insurance_policies', items: vault.insurances || [] },
+      { key: 'lockers', label: 'locker_details', items: vault.lockers || [] },
+      { key: 'cards', label: 'card_details', items: vault.cards || [] },
+      { key: 'properties', label: 'property_details', items: vault.properties || [] },
+      { key: 'liabilities', label: 'liability_details', items: vault.liabilities || [] },
+      { key: 'passwords', label: 'online_passwords', items: vault.passwords || [] },
+    ];
+
+    for (const sec of sectionsToSync) {
+      if (sec.items.length > 0) {
+        const candidates = SECTION_TABLE_MAPPINGS[sec.key];
+        const rows = transformSectionToRows(sec.key, sec.items);
+        const res = await smartUpsert(client, candidates, rows);
+        results[res.tableName || sec.label] = res.message;
+      }
     }
 
-    // 2. Contacts
-    if (vault.contacts?.length) {
-      const rows = vault.contacts.map((c) => ({
-        id: c.id,
-        sr_no: c.srNo,
-        particulars: c.particulars,
-        name: c.name || '',
-        mobile: c.mobile || '',
-        email: c.email || '',
-        address: c.address || '',
-        remarks: c.remarks || '',
-      }));
-      const { error } = await client.from('important_contacts').upsert(rows);
-      results.important_contacts = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 3. Financial Documents
-    if (vault.documents?.length) {
-      const rows = vault.documents.map((d) => ({
-        id: d.id,
-        sr_no: d.srNo,
-        document_name: d.documentName,
-        document_number: d.documentNumber || '',
-        physical_location: d.physicalLocation || '',
-        virtual_location: d.virtualLocation || '',
-        remarks: d.remarks || '',
-        expiry_date: d.expiryDate || '',
-        status_note: d.statusNote || '',
-      }));
-      const { error } = await client.from('financial_documents').upsert(rows);
-      results.financial_documents = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 4. Online Accounts
-    if (vault.onlineAccounts?.length) {
-      const rows = vault.onlineAccounts.map((o) => ({
-        id: o.id,
-        sr_no: o.srNo,
-        platform: o.platform,
-        email: o.email,
-        mobile: o.mobile || '',
-        account_id: o.accountId || '',
-        remarks: o.remarks || '',
-      }));
-      const { error } = await client.from('online_accounts').upsert(rows);
-      results.online_accounts = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 5. Investment Accounts
-    if (vault.investments?.length) {
-      const rows = vault.investments.map((i) => ({
-        id: i.id,
-        sr_no: i.srNo,
-        investment_type: i.investmentType,
-        platform: i.platform,
-        account_holder_name: i.accountHolderName,
-        agent_or_advisor: i.agentOrAdvisor || '',
-        account_number: i.accountNumber,
-        nominee: i.nominee || '',
-        maturity_date: i.maturityDate || '',
-        linked_bank: i.linkedBank || '',
-        reg_mobile: i.regMobile || '',
-        reg_email: i.regEmail || '',
-        remarks: i.remarks || '',
-      }));
-      const { error } = await client.from('investment_accounts').upsert(rows);
-      results.investment_accounts = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 6. Insurance Policies
-    if (vault.insurances?.length) {
-      const rows = vault.insurances.map((p) => ({
-        id: p.id,
-        sr_no: p.srNo,
-        type: p.type,
-        policy_name: p.policyName,
-        policy_number: p.policyNumber,
-        covered_person: p.coveredPerson || '',
-        amount_insured: p.amountInsured || '',
-        nominee: p.nominee || '',
-        advisor: p.advisor || '',
-        valid_till: p.validTill || '',
-        premium_amount: p.premiumAmount || '',
-        premium_due_date: p.premiumDueDate || '',
-        remarks: p.remarks || '',
-      }));
-      const { error } = await client.from('insurance_policies').upsert(rows);
-      results.insurance_policies = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 7. Lockers
-    if (vault.lockers?.length) {
-      const rows = vault.lockers.map((l) => ({
-        id: l.id,
-        sr_no: l.srNo,
-        bank_and_branch: l.bankAndBranch,
-        account_number: l.accountNumber || '',
-        locker_number: l.lockerNumber,
-        in_name_of: l.inNameOf || '',
-        nominee: l.nominee || '',
-        code_or_remarks: l.codeOrRemarks || '',
-      }));
-      const { error } = await client.from('safe_lockers').upsert(rows);
-      results.safe_lockers = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 8. Cards
-    if (vault.cards?.length) {
-      const rows = vault.cards.map((c) => ({
-        id: c.id,
-        sr_no: c.srNo,
-        name_on_card: c.nameOnCard,
-        card_type: c.cardType,
-        cardnumber: c.cardNumber || '',
-        linked_account: c.linkedAccount || '',
-        reg_mobile: c.regMobile || '',
-        valid_till: c.validTill || '',
-        remarks: c.remarks || '',
-      }));
-      const { error } = await client.from('bank_cards').upsert(rows);
-      results.bank_cards = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 9. Properties
-    if (vault.properties?.length) {
-      const rows = vault.properties.map((p) => ({
-        id: p.id,
-        sr_no: p.srNo,
-        property_name: p.propertyName,
-        property_area: p.propertyArea || '',
-        owners: p.owners || '',
-        registration_number: p.registrationNumber || '',
-        nominee: p.nominee || '',
-        remarks: p.remarks || '',
-      }));
-      const { error } = await client.from('properties').upsert(rows);
-      results.properties = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 10. Liabilities
-    if (vault.liabilities?.length) {
-      const rows = vault.liabilities.map((l) => ({
-        id: l.id,
-        sr_no: l.srNo,
-        bank_or_lender: l.bankOrLender,
-        liability_type: l.liabilityType,
-        amount: l.amount,
-        terms: l.terms || '',
-        remarks: l.remarks || '',
-      }));
-      const { error } = await client.from('liabilities').upsert(rows);
-      results.liabilities = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    // 11. Passwords
-    if (vault.passwords?.length) {
-      const rows = vault.passwords.map((w) => ({
-        id: w.id,
-        sr_no: w.srNo,
-        login_kind: w.loginKind,
-        person_aware: w.personAware,
-        remarks: w.remarks || '',
-        instructions: w.instructions || '',
-      }));
-      const { error } = await client.from('online_passwords').upsert(rows);
-      results.online_passwords = error ? `Error: ${error.message}` : `${rows.length} rows synced`;
-    }
-
-    const hasErrors = Object.values(results).some((msg) => msg.startsWith('Error:'));
-    if (hasErrors) {
-      const errorList = Object.entries(results)
-        .filter(([_, msg]) => msg.startsWith('Error:'))
-        .map(([tbl, msg]) => `${tbl}: ${msg}`)
-        .join('; ');
+    const errorEntries = Object.entries(results).filter(([_, msg]) => msg.startsWith('Error:'));
+    if (errorEntries.length > 0) {
+      const errorList = errorEntries.map(([tbl, msg]) => `${tbl}: ${msg}`).join('; ');
       return {
         success: false,
         message: `Failed to push: ${errorList}`,
@@ -455,7 +620,7 @@ export async function pushVaultToSupabase(
 }
 
 /**
- * Fetch all vault data from Supabase tables
+ * Fetch all vault data from Supabase tables (Pull Latest from DB)
  */
 export async function pullVaultFromSupabase(
   customConfig?: { url?: string; anonKey?: string }
@@ -468,24 +633,6 @@ export async function pullVaultFromSupabase(
     saveClientConfig(customConfig.url, customConfig.anonKey);
   }
 
-  // 1. Try server-side endpoint first (immune to CORS)
-  try {
-    const res = await fetch('/api/vault');
-    if (res.ok) {
-      const json = await res.json();
-      if (json.data) {
-        return {
-          success: true,
-          data: json.data,
-          message: 'Retrieved latest vault records from Supabase!',
-        };
-      }
-    }
-  } catch {
-    // Normal for static hosting
-  }
-
-  // 2. Fallback to client query
   const cfg = customConfig?.url && customConfig?.anonKey
     ? { url: cleanSupabaseUrl(customConfig.url), anonKey: customConfig.anonKey.trim() }
     : await getClientConfig();
@@ -516,23 +663,25 @@ export async function pullVaultFromSupabase(
       liaRes,
       pwdRes,
     ] = await Promise.all([
-      client.from('family_members').select('*'),
-      client.from('important_contacts').select('*').order('sr_no', { ascending: true }),
-      client.from('financial_documents').select('*').order('sr_no', { ascending: true }),
-      client.from('online_accounts').select('*').order('sr_no', { ascending: true }),
-      client.from('investment_accounts').select('*').order('sr_no', { ascending: true }),
-      client.from('insurance_policies').select('*').order('sr_no', { ascending: true }),
-      client.from('safe_lockers').select('*').order('sr_no', { ascending: true }),
-      client.from('bank_cards').select('*').order('sr_no', { ascending: true }),
-      client.from('properties').select('*').order('sr_no', { ascending: true }),
-      client.from('liabilities').select('*').order('sr_no', { ascending: true }),
-      client.from('online_passwords').select('*').order('sr_no', { ascending: true }),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.familyMembers),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.contacts, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.documents, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.onlineAccounts, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.investments, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.insurances, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.lockers, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.cards, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.properties, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.liabilities, 'sr_no'),
+      smartSelect(client, SECTION_TABLE_MAPPINGS.passwords, 'sr_no'),
     ]);
 
-    // Check if we received data
     const hasData =
       (familyRes.data && familyRes.data.length > 0) ||
-      (docsRes.data && docsRes.data.length > 0);
+      (docsRes.data && docsRes.data.length > 0) ||
+      (contactsRes.data && contactsRes.data.length > 0) ||
+      (lockersRes.data && lockersRes.data.length > 0) ||
+      (cardsRes.data && cardsRes.data.length > 0);
 
     if (!hasData) {
       return {
@@ -545,116 +694,143 @@ export async function pullVaultFromSupabase(
     const state: VaultState = {
       currentDate: '15-Oct-2026',
       currentYear: 2026,
-      familyMembers:
-        familyRes.data?.map((m: any) => ({
-          id: m.id,
-          category: m.category,
-          name: m.name,
-          relationship: m.relationship,
-          notes: m.notes,
-        })) || INITIAL_VAULT_DATA.familyMembers,
-      contacts:
-        contactsRes.data?.map((c: any) => ({
-          id: c.id,
-          srNo: c.sr_no,
-          particulars: c.particulars,
-          name: c.person_name || c.name || '',
-          mobile: c.phone || c.mobile || '',
-          email: c.email || '',
-          address: c.address || '',
-          remarks: c.remarks || '',
-        })) || INITIAL_VAULT_DATA.contacts,
-      documents:
-        docsRes.data?.map((d: any) => ({
-          id: d.id,
-          srNo: d.sr_no,
-          documentName: d.document_type || d.document_name,
-          documentNumber: d.document_number || '',
-          physicalLocation: d.location_physical || d.physical_location || '',
-          virtualLocation: d.location_virtual || d.virtual_location || '',
-          remarks: d.remarks || '',
-          expiryDate: d.expiry_date || '',
-          statusNote: d.expires_soon || d.status_note || '',
-        })) || INITIAL_VAULT_DATA.documents,
-      onlineAccounts:
-        onlineRes.data?.map((o: any) => ({
-          id: o.id,
-          srNo: o.sr_no,
-          platform: o.company || o.platform,
-          email: o.registered_email || o.email,
-          mobile: o.registered_mobile || o.mobile || '',
-          accountId: o.login_id || o.account_id || '',
-          remarks: o.remarks || '',
-        })) || INITIAL_VAULT_DATA.onlineAccounts,
-      insurances:
-        insRes.data?.map((p: any) => ({
-          id: p.id,
-          srNo: p.sr_no,
-          type: p.policy_type || p.type,
-          policyName: p.policy_name,
-          policyNumber: p.policy_no || p.policy_number,
-          coveredPerson: p.person_covered || '',
-          amountInsured: p.amount_insured || '',
-          nominee: p.nominee || '',
-          validTill: p.maturity_date || p.valid_till || '',
-          premiumAmount: p.premium_amount || '',
-          premiumDueDate: p.premium_due_date || '',
-          remarks: p.remarks || '',
-        })) || INITIAL_VAULT_DATA.insurances,
-      lockers:
-        lockersRes.data?.map((l: any) => ({
-          id: l.id,
-          srNo: l.sr_no,
-          bankAndBranch: l.bank_name || l.bank_and_branch,
-          accountNumber: '',
-          lockerNumber: l.locker_no || l.locker_number,
-          inNameOf: l.operating_mode || l.in_name_of || '',
-          nominee: l.nominee || '',
-          codeOrRemarks: l.remarks || l.code_or_remarks || '',
-        })) || INITIAL_VAULT_DATA.lockers,
-      cards:
-        cardsRes.data?.map((c: any) => ({
-          id: c.id,
-          srNo: c.sr_no,
-          nameOnCard: c.card_holder || c.name_on_card,
-          cardType: c.card_type,
-          cardNumber: c.last4 || c.cardnumber || '',
-          linkedAccount: c.linked_account || '',
-          regMobile: '',
-          validTill: c.expiry || c.valid_till || '',
-          remarks: c.remarks || '',
-        })) || INITIAL_VAULT_DATA.cards,
-      properties:
-        propRes.data?.map((p: any) => ({
-          id: p.id,
-          srNo: p.sr_no,
-          propertyName: p.property_name,
-          propertyArea: p.property_type || p.property_area || '',
-          owners: p.ownership || p.owners || '',
-          registrationNumber: '',
-          nominee: p.nominee || '',
-          remarks: p.remarks || '',
-        })) || INITIAL_VAULT_DATA.properties,
-      liabilities:
-        liaRes.data?.map((l: any) => ({
-          id: l.id,
-          srNo: l.sr_no,
-          bankOrLender: l.lender_name || l.bank_or_lender,
-          liabilityType: l.liability_type,
-          amount: l.original_amount || l.amount,
-          terms: '',
-          remarks: l.remarks || '',
-        })) || INITIAL_VAULT_DATA.liabilities,
-      passwords:
-        pwdRes.data?.map((w: any) => ({
-          id: w.id,
-          srNo: w.sr_no,
-          loginKind: w.login_kind,
-          personAware: w.person_aware,
-          remarks: w.remarks || '',
-          instructions: w.recovery_method || w.instructions || '',
-        })) || INITIAL_VAULT_DATA.passwords,
-      investments: INITIAL_VAULT_DATA.investments,
+      familyMembers: familyRes.data && familyRes.data.length > 0
+        ? familyRes.data.map((m: any) => ({
+            id: m.id,
+            category: m.category,
+            name: m.name,
+            relationship: m.relationship,
+            notes: m.notes || '',
+          }))
+        : INITIAL_VAULT_DATA.familyMembers,
+      contacts: contactsRes.data && contactsRes.data.length > 0
+        ? contactsRes.data.map((c: any) => ({
+            id: c.id,
+            srNo: c.sr_no,
+            particulars: c.particulars,
+            name: c.person_name || c.name || '',
+            mobile: c.mobile || c.phone || c.mobile_no || c.contact_no || '',
+            email: c.email || '',
+            address: c.address || '',
+            remarks: c.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.contacts,
+      documents: docsRes.data && docsRes.data.length > 0
+        ? docsRes.data.map((d: any) => ({
+            id: d.id,
+            srNo: d.sr_no,
+            documentName: d.document_name || d.document_type || '',
+            documentNumber: d.document_number || '',
+            physicalLocation: d.physical_location || d.location_physical || '',
+            virtualLocation: d.virtual_location || d.location_virtual || '',
+            remarks: d.remarks || '',
+            expiryDate: d.expiry_date || '',
+            statusNote: d.status_note || d.expires_soon || '',
+          }))
+        : INITIAL_VAULT_DATA.documents,
+      onlineAccounts: onlineRes.data && onlineRes.data.length > 0
+        ? onlineRes.data.map((o: any) => ({
+            id: o.id,
+            srNo: o.sr_no,
+            platform: o.platform || o.company || '',
+            email: o.email || o.registered_email || '',
+            mobile: o.mobile || o.registered_mobile || '',
+            accountId: o.account_id || o.login_id || '',
+            remarks: o.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.onlineAccounts,
+      investments: invRes.data && invRes.data.length > 0
+        ? invRes.data.map((i: any) => ({
+            id: i.id,
+            srNo: i.sr_no,
+            investmentType: i.investment_type || '',
+            platform: i.platform || '',
+            accountHolderName: i.account_holder_name || '',
+            agentOrAdvisor: i.agent_or_advisor || '',
+            accountNumber: i.account_number || '',
+            nominee: i.nominee || '',
+            maturityDate: i.maturity_date || '',
+            linkedBank: i.linked_bank || '',
+            regMobile: i.reg_mobile || '',
+            regEmail: i.reg_email || '',
+            remarks: i.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.investments,
+      insurances: insRes.data && insRes.data.length > 0
+        ? insRes.data.map((p: any) => ({
+            id: p.id,
+            srNo: p.sr_no,
+            type: p.type || p.policy_type || '',
+            policyName: p.policy_name || '',
+            policyNumber: p.policy_number || p.policy_no || '',
+            coveredPerson: p.covered_person || p.person_covered || '',
+            amountInsured: p.amount_insured || '',
+            nominee: p.nominee || '',
+            advisor: p.advisor || '',
+            validTill: p.valid_till || p.maturity_date || '',
+            premiumAmount: p.premium_amount || '',
+            premiumDueDate: p.premium_due_date || '',
+            remarks: p.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.insurances,
+      lockers: lockersRes.data && lockersRes.data.length > 0
+        ? lockersRes.data.map((l: any) => ({
+            id: l.id,
+            srNo: l.sr_no,
+            bankAndBranch: l.bank_and_branch || l.bank_name || '',
+            accountNumber: l.account_number || '',
+            lockerNumber: l.locker_number || l.locker_no || '',
+            inNameOf: l.in_name_of || l.operating_mode || '',
+            nominee: l.nominee || '',
+            codeOrRemarks: l.code_or_remarks || l.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.lockers,
+      cards: cardsRes.data && cardsRes.data.length > 0
+        ? cardsRes.data.map((c: any) => ({
+            id: c.id,
+            srNo: c.sr_no,
+            nameOnCard: c.name_on_card || c.card_holder || '',
+            cardType: c.card_type || 'Debit',
+            cardNumber: c.cardnumber || c.card_number || c.last4 || '',
+            linkedAccount: c.linked_account || '',
+            regMobile: c.reg_mobile || '',
+            validTill: c.valid_till || c.expiry || '',
+            remarks: c.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.cards,
+      properties: propRes.data && propRes.data.length > 0
+        ? propRes.data.map((p: any) => ({
+            id: p.id,
+            srNo: p.sr_no,
+            propertyName: p.property_name || '',
+            propertyArea: p.property_area || p.property_type || '',
+            owners: p.owners || p.ownership || '',
+            registrationNumber: p.registration_number || '',
+            nominee: p.nominee || '',
+            remarks: p.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.properties,
+      liabilities: liaRes.data && liaRes.data.length > 0
+        ? liaRes.data.map((l: any) => ({
+            id: l.id,
+            srNo: l.sr_no,
+            bankOrLender: l.bank_or_lender || l.lender_name || '',
+            liabilityType: l.liability_type || '',
+            amount: l.amount || l.original_amount || '',
+            terms: l.terms || '',
+            remarks: l.remarks || '',
+          }))
+        : INITIAL_VAULT_DATA.liabilities,
+      passwords: pwdRes.data && pwdRes.data.length > 0
+        ? pwdRes.data.map((w: any) => ({
+            id: w.id,
+            srNo: w.sr_no,
+            loginKind: w.login_kind || '',
+            personAware: w.person_aware || '',
+            remarks: w.remarks || '',
+            instructions: w.instructions || w.recovery_method || '',
+          }))
+        : INITIAL_VAULT_DATA.passwords,
     };
 
     return { success: true, data: state };

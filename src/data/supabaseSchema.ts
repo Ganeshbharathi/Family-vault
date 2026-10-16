@@ -278,3 +278,43 @@ export const PROXMOX_SETUP_GUIDE_STEPS = [
     ],
   },
 ];
+
+export const SUPABASE_QUICK_FIX_SQL = `-- ==============================================================================
+-- KUTUMBVAULT: QUICK SCHEMA FIX FOR MISSING TABLES & COLUMNS
+-- Paste & Run in Supabase SQL Editor: https://sup.puppylab.cc/project/default/sql
+-- ==============================================================================
+
+-- 1. Ensure 'mobile' column exists in important_contacts
+ALTER TABLE IF EXISTS public.important_contacts ADD COLUMN IF NOT EXISTS mobile TEXT;
+
+-- 2. Create investment_accounts table if missing
+CREATE TABLE IF NOT EXISTS public.investment_accounts (
+    id TEXT PRIMARY KEY,
+    sr_no INT NOT NULL,
+    investment_type TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    account_holder_name TEXT NOT NULL,
+    agent_or_advisor TEXT,
+    account_number TEXT NOT NULL,
+    nominee TEXT,
+    maturity_date TEXT,
+    linked_bank TEXT,
+    reg_mobile TEXT,
+    reg_email TEXT,
+    remarks TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. In case any alias tables are missing, ensure compatibility views or tables exist:
+DO $$
+BEGIN
+    -- If locker_details exists but safe_lockers does not, create a view or synonym
+    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'locker_details') THEN
+        CREATE TABLE IF NOT EXISTS public.locker_details (LIKE public.safe_lockers INCLUDING ALL);
+    END IF;
+END $$;
+
+-- 4. Reload PostgREST schema cache immediately
+NOTIFY pgrst, 'reload schema';
+`;

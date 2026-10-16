@@ -24,6 +24,8 @@ interface NavbarProps {
   mobileMenuOpen: boolean;
   onToggleMobileMenu: () => void;
   lastUpdated: string;
+  syncStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  lastSavedTime?: string;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -38,6 +40,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   mobileMenuOpen,
   onToggleMobileMenu,
   lastUpdated,
+  syncStatus = 'idle',
+  lastSavedTime,
 }) => {
   return (
     <header className="sticky top-0 z-30 bg-white border-b border-slate-200">
@@ -86,21 +90,37 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Supabase Proxmox Status / Setup Button */}
+          {/* Supabase Auto-Sync & Database Status Button */}
           <button
             type="button"
             onClick={onOpenSupabaseGuide}
-            aria-label="Open Supabase Proxmox backend guide"
+            aria-label="Open Supabase Cloud Sync settings"
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${
-              supabaseConnected
+              syncStatus === 'saving'
+                ? 'bg-amber-50 text-amber-800 border-amber-300'
+                : syncStatus === 'error'
+                ? 'bg-rose-50 text-rose-800 border-rose-300'
+                : supabaseConnected
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
                 : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
             }`}
-            title="Click to view Supabase Proxmox connection & SQL setup guide"
+            title="Click to view Supabase connection, Auto-Sync status & manual Push/Fetch"
           >
             <Database className="w-3.5 h-3.5 shrink-0" />
             <span className="hidden sm:inline">Supabase:</span>
-            <span>{supabaseConnected ? 'Connected' : 'Proxmox Setup'}</span>
+            {syncStatus === 'saving' ? (
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                <span>Auto-saving...</span>
+              </span>
+            ) : syncStatus === 'saved' && lastSavedTime ? (
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="font-medium">Synced {lastSavedTime}</span>
+              </span>
+            ) : (
+              <span>{supabaseConnected ? 'Connected' : 'Setup DB'}</span>
+            )}
           </button>
 
           <button

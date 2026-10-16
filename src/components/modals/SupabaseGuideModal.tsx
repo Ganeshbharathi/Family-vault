@@ -19,7 +19,7 @@ import {
   EyeOff,
   ExternalLink,
 } from 'lucide-react';
-import { SUPABASE_SQL_SCHEMA, PROXMOX_SETUP_GUIDE_STEPS } from '../../data/supabaseSchema.ts';
+import { SUPABASE_SQL_SCHEMA, SUPABASE_QUICK_FIX_SQL, PROXMOX_SETUP_GUIDE_STEPS } from '../../data/supabaseSchema.ts';
 import {
   getClientConfig,
   saveClientConfig,
@@ -46,6 +46,7 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
   showToast,
 }) => {
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedFixSql, setCopiedFixSql] = useState(false);
   const [copiedEnv, setCopiedEnv] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
@@ -297,43 +298,72 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
-          {/* Action Center: Push / Pull */}
-          <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 text-slate-800 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-sm text-emerald-950 flex items-center gap-2">
+          {/* Action Center: Push / Pull & Auto-sync */}
+          <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 text-slate-800 space-y-3.5">
+            <div>
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                   <UploadCloud className="w-4 h-4 text-emerald-600" />
-                  Synchronize Data with Your Supabase Instance
+                  Supabase Cloud Synchronization
                 </h3>
-                <p className="text-[11px] text-emerald-800 mt-0.5">
-                  Now that your SQL tables are created, push your sheet's family data into Supabase, or pull any updates back.
-                </p>
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                  Real-time Auto-Sync Active
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 mt-1">
+                Any change you make in any section is automatically saved to the corresponding Supabase table in the background. Use the two manual options below as a fallback.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              {/* Option 1: Manual Full Push */}
+              <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-2xs flex flex-col justify-between gap-2.5">
+                <div>
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-950">
+                    <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px]">1</span>
+                    Push All Data from App to Supabase
+                  </div>
+                  <p className="text-[10.5px] text-slate-500 mt-1">
+                    Uploads all current frontend records across all 11 tables to your Supabase PostgreSQL database.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isPushing}
+                  onClick={handlePushData}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all shadow-2xs"
+                >
+                  <UploadCloud className={`w-3.5 h-3.5 ${isPushing ? 'animate-bounce' : ''}`} />
+                  <span>{isPushing ? 'Pushing Records...' : 'Push All Data to Supabase'}</span>
+                </button>
+              </div>
+
+              {/* Option 2: Fetch Latest */}
+              <div className="p-3 bg-white rounded-xl border border-indigo-200 shadow-2xs flex flex-col justify-between gap-2.5">
+                <div>
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-indigo-950">
+                    <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[11px]">2</span>
+                    Fetch Latest from Supabase
+                  </div>
+                  <p className="text-[10.5px] text-slate-500 mt-1">
+                    Pulls latest database records from your home server directly into your browser application.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isPulling}
+                  onClick={handlePullData}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all shadow-2xs"
+                >
+                  <DownloadCloud className={`w-3.5 h-3.5 ${isPulling ? 'animate-bounce' : ''}`} />
+                  <span>{isPulling ? 'Fetching...' : 'Fetch Latest from Supabase'}</span>
+                </button>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <button
-                type="button"
-                disabled={isPushing}
-                onClick={handlePushData}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm hover:shadow"
-              >
-                <UploadCloud className={`w-4 h-4 ${isPushing ? 'animate-bounce' : ''}`} />
-                <span>{isPushing ? 'Pushing Records...' : 'Push All Initial Data to Supabase'}</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isPulling}
-                onClick={handlePullData}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition-all shadow-2xs"
-              >
-                <DownloadCloud className={`w-4 h-4 ${isPulling ? 'animate-bounce' : ''}`} />
-                <span>{isPulling ? 'Fetching...' : 'Fetch Latest from Supabase'}</span>
-              </button>
-            </div>
             {connectionStatus.message && (
-              <div className="text-[11px] font-mono text-emerald-900 bg-white/70 p-2 rounded border border-emerald-200/60">
+              <div className="text-[11px] font-mono text-slate-800 bg-white/80 p-2.5 rounded-lg border border-slate-200 shadow-2xs">
                 {connectionStatus.message}
               </div>
             )}
@@ -438,7 +468,7 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
           <div>
             <h3 className="text-sm font-bold text-slate-900 mb-2 flex items-center gap-2">
               <Layers className="w-4 h-4 text-slate-600" />
-              Created Tables in Supabase:
+              Connected Tables in Supabase (11 Sections):
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {[
@@ -446,6 +476,7 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
                 { name: 'important_contacts', desc: 'Doctors, lawyers, CA, HR, Mom' },
                 { name: 'financial_documents', desc: '19 IDs + locations & expiry notes' },
                 { name: 'online_accounts', desc: 'Zerodha, Golden Pi, Wint Wealth, CDSL' },
+                { name: 'investment_accounts', desc: 'Mutual funds, Demat, PPF, EPF, FDs' },
                 { name: 'insurance_policies', desc: 'Life, health floater, motor policies' },
                 { name: 'locker_details', desc: 'Bank safe deposit lockers & keys' },
                 { name: 'card_details', desc: 'Debit and credit cards' },
@@ -459,6 +490,47 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Quick Schema Fix Box (For missing columns or tables) */}
+          <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/60 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-amber-700" />
+                <span className="font-bold text-xs text-amber-950">
+                  Quick SQL Fix: Add 'mobile' column & 'investment_accounts' table
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href="https://sup.puppylab.cc/project/default/sql"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 bg-white px-2.5 py-1 rounded-md border border-slate-200 shadow-2xs"
+                >
+                  <span>Open SQL Editor</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(SUPABASE_QUICK_FIX_SQL);
+                    setCopiedFixSql(true);
+                    setTimeout(() => setCopiedFixSql(false), 2500);
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-md transition-colors shadow-2xs"
+                >
+                  {copiedFixSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedFixSql ? 'Copied!' : 'Copy Quick Fix SQL'}</span>
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-amber-900">
+              Run this 4-line snippet in Supabase SQL Editor to instantly ensure the <code className="bg-amber-100 px-1 rounded">mobile</code> column and <code className="bg-amber-100 px-1 rounded">investment_accounts</code> table are ready and schema cache is reloaded.
+            </p>
+            <pre className="p-3 bg-slate-900 text-amber-300 rounded-lg font-mono text-[10.5px] overflow-x-auto max-h-32 leading-relaxed">
+              {SUPABASE_QUICK_FIX_SQL}
+            </pre>
           </div>
 
           {/* SQL Reference Box */}
