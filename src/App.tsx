@@ -17,6 +17,7 @@ import {
   pullVaultFromSupabase,
   pushVaultToSupabase,
   syncSectionToSupabase,
+  uploadDocumentToSupabaseStorage,
   SyncSectionKey,
 } from './services/supabaseClient.ts';
 
@@ -226,8 +227,26 @@ export default function App() {
     }
   };
 
-  // Upload file attachment for a document
+  // Upload file attachment for a document (Supabase Storage direct or local fallback)
   const handleUploadFile = async (docId: string, file: File): Promise<DocumentAttachment | null> => {
+    // 1. First attempt direct upload to Supabase Storage bucket 'vault_documents'
+    try {
+      const storageRes = await uploadDocumentToSupabaseStorage(file, docId);
+      if (storageRes.success && storageRes.attachment) {
+        setVault((prev) => ({
+          ...prev,
+          documents: prev.documents.map((d) =>
+            d.id === docId ? { ...d, attachment: storageRes.attachment! } : d
+          ),
+        }));
+        showToast(`File "${file.name}" uploaded to Supabase Storage!`);
+        return storageRes.attachment;
+      }
+    } catch {
+      // Continue to local / server fallback
+    }
+
+    // 2. Fallback to server endpoint or local base64 Data URL
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = async () => {
@@ -253,7 +272,7 @@ export default function App() {
               attachment = resData.attachment;
             }
           } catch {
-            // Backend not present (e.g. static hosting on GitHub Pages / Cloudflare Pages)
+            // Backend not present (e.g. static hosting on Cloudflare Pages)
           }
 
           if (!attachment) {

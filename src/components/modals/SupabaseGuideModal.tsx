@@ -5,21 +5,25 @@ import {
   Copy,
   Check,
   Download,
-  Server,
   RefreshCw,
   CheckCircle2,
   AlertCircle,
   Layers,
   HardDrive,
-  Terminal,
   UploadCloud,
   DownloadCloud,
   Key,
   Eye,
   EyeOff,
   ExternalLink,
+  FileText,
+  FileCheck,
 } from 'lucide-react';
-import { SUPABASE_SQL_SCHEMA, SUPABASE_QUICK_FIX_SQL, PROXMOX_SETUP_GUIDE_STEPS } from '../../data/supabaseSchema.ts';
+import {
+  SUPABASE_SQL_SCHEMA,
+  VAULT_SECTIONS_SPECIFICATION,
+  PROXMOX_SETUP_GUIDE_STEPS,
+} from '../../data/supabaseSchema.ts';
 import {
   getClientConfig,
   saveClientConfig,
@@ -45,13 +49,8 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
   onUpdateVault,
   showToast,
 }) => {
+  const [activeTab, setActiveTab] = useState<'sync' | 'revamp' | 'specs'>('sync');
   const [copiedSql, setCopiedSql] = useState(false);
-  const [copiedFixSql, setCopiedFixSql] = useState(false);
-  const [copiedEnv, setCopiedEnv] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
-  const [isPushing, setIsPushing] = useState(false);
-  const [isPulling, setIsPulling] = useState(false);
-
   const [supabaseUrl, setSupabaseUrl] = useState(
     typeof window !== 'undefined' && window.location.hostname.includes('puppylab.cc')
       ? 'https://sup.puppylab.cc'
@@ -65,25 +64,28 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
     checked: boolean;
   }>({
     connected: false,
-    message: 'Checking Supabase connection...',
+    message: '',
     checked: false,
   });
+  const [isChecking, setIsChecking] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
 
-  // Load config on mount/open
   useEffect(() => {
     if (isOpen) {
       getClientConfig().then((cfg) => {
-        if (cfg.url) setSupabaseUrl(cfg.url);
-        if (cfg.anonKey) setSupabaseAnonKey(cfg.anonKey);
-
+        if (cfg.url) {
+          setSupabaseUrl(cfg.url);
+        }
+        if (cfg.anonKey) {
+          setSupabaseAnonKey(cfg.anonKey);
+        }
         if (cfg.url && cfg.anonKey) {
           handleTestConnection(cfg.url, cfg.anonKey);
         } else {
           setConnectionStatus({
             connected: false,
-            message: !cfg.anonKey
-              ? 'Anon Key required: Enter your Supabase Anon Key in Connection Parameters below.'
-              : 'Testing connection...',
+            message: 'Anon key is missing. Paste your Anon Key below and click "Save & Re-test".',
             checked: true,
           });
         }
@@ -91,25 +93,39 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
     }
   }, [isOpen]);
 
-  const handleTestConnection = async (urlToTest?: string, keyToTest?: string) => {
-    setIsChecking(true);
-    const targetUrl = urlToTest !== undefined ? urlToTest : supabaseUrl;
-    const targetKey = keyToTest !== undefined ? keyToTest : supabaseAnonKey;
+  const handleTestConnection = async (targetUrl?: string, targetKey?: string) => {
+    const urlToTest = cleanSupabaseUrl(targetUrl || supabaseUrl);
+    const keyToTest = (targetKey !== undefined ? targetKey : supabaseAnonKey).trim();
 
-    if (targetUrl) {
-      saveClientConfig(targetUrl, targetKey || '');
+    if (!urlToTest) {
+      setConnectionStatus({
+        connected: false,
+        message: 'Please enter a valid Supabase URL.',
+        checked: true,
+      });
+      return;
     }
 
-    const res = await testSupabaseConnection({ url: targetUrl, anonKey: targetKey });
+    if (!keyToTest) {
+      setConnectionStatus({
+        connected: false,
+        message: 'Anon Key is empty. Paste your public anon key below and click "Save & Re-test".',
+        checked: true,
+      });
+      return;
+    }
+
+    setIsChecking(true);
+    const result = await testSupabaseConnection({ url: urlToTest, anonKey: keyToTest });
+    setIsChecking(false);
     setConnectionStatus({
-      connected: res.ok,
-      message: res.message,
+      connected: result.ok,
+      message: result.message,
       checked: true,
     });
-    setIsChecking(false);
   };
 
-  const handleSaveConfig = async () => {
+  const handleSaveConfig = () => {
     const cleanUrl = cleanSupabaseUrl(supabaseUrl);
     const cleanKey = (supabaseAnonKey || '').trim();
 
@@ -118,25 +134,21 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
       return;
     }
     if (!cleanKey) {
-      showToast('Please paste your Supabase Anon Key');
+      showToast('Please paste your Supabase anon key');
       return;
     }
 
     saveClientConfig(cleanUrl, cleanKey);
-    await handleTestConnection(cleanUrl, cleanKey);
-    showToast('Supabase configuration saved & tested!');
+    showToast('Saved Supabase configuration to local storage!');
+    handleTestConnection(cleanUrl, cleanKey);
   };
 
   const handlePushData = async () => {
     const cleanUrl = cleanSupabaseUrl(supabaseUrl);
     const cleanKey = (supabaseAnonKey || '').trim();
 
-    if (!cleanUrl) {
-      showToast('Please enter your Supabase URL (e.g. https://sup.puppylab.cc)');
-      return;
-    }
     if (!cleanKey) {
-      showToast('Please paste your Supabase Anon Key in Connection Parameters below first!');
+      showToast('Please paste your Supabase Anon Key first.');
       setConnectionStatus({
         connected: false,
         message: 'Anon Key missing: Please paste your Supabase Anon Key in Connection Parameters below and click "Save & Re-test".',
@@ -150,10 +162,10 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
     const res = await pushVaultToSupabase(vault, { url: cleanUrl, anonKey: cleanKey });
     setIsPushing(false);
     if (res.success) {
-      showToast('All family data successfully pushed to Supabase!');
+      showToast('All family vault data successfully pushed to Supabase!');
       setConnectionStatus({
         connected: true,
-        message: 'All 10 sections populated with records in Supabase.',
+        message: 'All sections populated with records in Supabase.',
         checked: true,
       });
     } else {
@@ -210,30 +222,20 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'kutumbvault_supabase_schema.sql');
+    link.setAttribute('download', 'kutumbvault_revamp_schema.sql');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  const envSample = `# Set in your server environment / .env
-SUPABASE_URL="${supabaseUrl}"
-SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'eyJhbGciOi...'}"`;
-
-  const handleCopyEnv = () => {
-    navigator.clipboard.writeText(envSample);
-    setCopiedEnv(true);
-    setTimeout(() => setCopiedEnv(false), 2500);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
       <div
-        className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]"
+        className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
         role="dialog"
         aria-modal="true"
-        aria-label="Supabase Proxmox Setup Guide"
+        aria-label="Supabase Database Center"
       >
         {/* Header */}
         <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-900 text-white">
@@ -243,13 +245,13 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold">Supabase Database Integration</h2>
+                <h2 className="text-base font-bold">Supabase Database Integration & Sync</h2>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
-                  Tailscale LAN
+                  Cloudflare Tunnel / Proxmox
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                Self-hosted on Ubuntu VM @ Proxmox (Bangalore) &bull; Connected via Tailscale
+                Self-hosted Supabase @ Ubuntu VM &bull; Connected via https://sup.puppylab.cc
               </p>
             </div>
           </div>
@@ -264,9 +266,9 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
         </div>
 
         {/* Live Status Bar */}
-        <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2.5">
-            <span className="font-semibold text-slate-700">Status:</span>
+            <span className="font-semibold text-slate-700">Database Status:</span>
             {connectionStatus.connected ? (
               <span className="inline-flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md font-semibold border border-emerald-200">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
@@ -278,7 +280,7 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
                 {connectionStatus.checked ? 'Not Connected' : 'Checking connection...'}
               </span>
             )}
-            <span className="font-mono text-slate-500 text-[11px] truncate max-w-[240px]">
+            <span className="font-mono text-slate-500 text-[11px] truncate max-w-[260px]">
               {supabaseUrl}
             </span>
           </div>
@@ -296,276 +298,337 @@ SUPABASE_ANON_KEY="${supabaseAnonKey ? `${supabaseAnonKey.slice(0, 15)}...` : 'e
           </div>
         </div>
 
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-slate-200 bg-slate-100/70 px-6 pt-2 gap-2 text-xs font-semibold text-slate-600">
+          <button
+            type="button"
+            onClick={() => setActiveTab('sync')}
+            className={`px-4 py-2 rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'sync'
+                ? 'bg-white text-indigo-700 border-indigo-600 shadow-2xs font-bold'
+                : 'border-transparent hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <UploadCloud className="w-4 h-4" />
+            <span>Sync Center (Push & Pull)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('revamp')}
+            className={`px-4 py-2 rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'revamp'
+                ? 'bg-white text-indigo-700 border-indigo-600 shadow-2xs font-bold'
+                : 'border-transparent hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <HardDrive className="w-4 h-4" />
+            <span>Master Revamp SQL Script</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('specs')}
+            className={`px-4 py-2 rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'specs'
+                ? 'bg-white text-indigo-700 border-indigo-600 shadow-2xs font-bold'
+                : 'border-transparent hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Sections & Doc Hosting Specs (11)</span>
+          </button>
+        </div>
+
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
-          {/* Action Center: Push / Pull & Auto-sync */}
-          <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 text-slate-800 space-y-3.5">
-            <div>
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <UploadCloud className="w-4 h-4 text-emerald-600" />
-                  Supabase Cloud Synchronization
-                </h3>
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                  Real-time Auto-Sync Active
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-600 mt-1">
-                Any change you make in any section is automatically saved to the corresponding Supabase table in the background. Use the two manual options below as a fallback.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              {/* Option 1: Manual Full Push */}
-              <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-2xs flex flex-col justify-between gap-2.5">
+          {activeTab === 'sync' && (
+            <>
+              {/* Intelligent Real-Time Sync Banner */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 text-slate-800 space-y-3.5">
                 <div>
-                  <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-950">
-                    <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px]">1</span>
-                    Push All Data from App to Supabase
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <UploadCloud className="w-4 h-4 text-emerald-600" />
+                      Two-Way Supabase Synchronization
+                    </h3>
+                    <span className="inline-flex items-center gap-1.5 text-[10.5px] font-bold bg-emerald-100 text-emerald-900 px-2.5 py-1 rounded-full border border-emerald-300">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                      Automatic Real-Time Field Sync Active
+                    </span>
                   </div>
-                  <p className="text-[10.5px] text-slate-500 mt-1">
-                    Uploads all current frontend records across all 11 tables to your Supabase PostgreSQL database.
+                  <p className="text-[11.5px] text-slate-600 mt-1">
+                    Whenever you edit any field in the application, the app automatically makes intelligent routing decisions to update the corresponding table in Supabase. The two manual options below serve as your instant manual fallback.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  disabled={isPushing}
-                  onClick={handlePushData}
-                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all shadow-2xs"
-                >
-                  <UploadCloud className={`w-3.5 h-3.5 ${isPushing ? 'animate-bounce' : ''}`} />
-                  <span>{isPushing ? 'Pushing Records...' : 'Push All Data to Supabase'}</span>
-                </button>
-              </div>
 
-              {/* Option 2: Fetch Latest */}
-              <div className="p-3 bg-white rounded-xl border border-indigo-200 shadow-2xs flex flex-col justify-between gap-2.5">
-                <div>
-                  <div className="flex items-center gap-1.5 font-bold text-xs text-indigo-950">
-                    <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[11px]">2</span>
-                    Fetch Latest from Supabase
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+                  {/* Option 1: Manual Full Push */}
+                  <div className="p-3.5 bg-white rounded-xl border border-emerald-300 shadow-2xs flex flex-col justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 font-bold text-xs text-emerald-950">
+                        <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px] font-bold">1</span>
+                        <span>Option 1: Push All Data to Supabase</span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1.5">
+                        Populates all current application records across all 11 sections directly into your Supabase PostgreSQL database tables.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isPushing}
+                      onClick={handlePushData}
+                      className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all shadow-2xs"
+                    >
+                      <UploadCloud className={`w-4 h-4 ${isPushing ? 'animate-bounce' : ''}`} />
+                      <span>{isPushing ? 'Pushing All 11 Sections...' : 'Push All Data from App to Supabase'}</span>
+                    </button>
                   </div>
-                  <p className="text-[10.5px] text-slate-500 mt-1">
-                    Pulls latest database records from your home server directly into your browser application.
-                  </p>
+
+                  {/* Option 2: Fetch Latest */}
+                  <div className="p-3.5 bg-white rounded-xl border border-indigo-300 shadow-2xs flex flex-col justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 font-bold text-xs text-indigo-950">
+                        <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[11px] font-bold">2</span>
+                        <span>Option 2: Fetch Latest from Supabase</span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1.5">
+                        Fetches the latest database records from your home server and reloads the browser application state.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isPulling}
+                      onClick={handlePullData}
+                      className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all shadow-2xs"
+                    >
+                      <DownloadCloud className={`w-4 h-4 ${isPulling ? 'animate-bounce' : ''}`} />
+                      <span>{isPulling ? 'Fetching Latest Records...' : 'Fetch Latest from Supabase'}</span>
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  disabled={isPulling}
-                  onClick={handlePullData}
-                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-all shadow-2xs"
-                >
-                  <DownloadCloud className={`w-3.5 h-3.5 ${isPulling ? 'animate-bounce' : ''}`} />
-                  <span>{isPulling ? 'Fetching...' : 'Fetch Latest from Supabase'}</span>
-                </button>
-              </div>
-            </div>
 
-            {connectionStatus.message && (
-              <div className="text-[11px] font-mono text-slate-800 bg-white/80 p-2.5 rounded-lg border border-slate-200 shadow-2xs">
-                {connectionStatus.message}
+                {connectionStatus.message && (
+                  <div className="text-[11px] font-mono text-slate-800 bg-white/90 p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                    {connectionStatus.message}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Connection Details Config Box */}
-          <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/30 space-y-3.5">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                <Key className="w-4 h-4 text-indigo-600" />
-                Connection Parameters (Cloudflare Tunnel / Direct HTTPS)
-              </h3>
-              <span className="text-[10px] font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-semibold">
-                Client-to-Supabase
-              </span>
-            </div>
+              {/* Connection Details Config Box */}
+              <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/30 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Key className="w-4 h-4 text-indigo-600" />
+                    Connection Parameters (Cloudflare Tunnel / Direct HTTPS)
+                  </h3>
+                  <span className="text-[10px] font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-semibold">
+                    Local Storage Override
+                  </span>
+                </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  Supabase Backend URL
-                </label>
-                <input
-                  type="text"
-                  value={supabaseUrl}
-                  onChange={(e) => setSupabaseUrl(e.target.value)}
-                  placeholder="https://sup.puppylab.cc"
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
-                />
-                <span className="text-[10px] text-slate-500 mt-1 block">
-                  Cloudflare Tunnel domain routing to your Ubuntu Supabase instance.
-                </span>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-[11px] font-semibold text-slate-700">
-                    Supabase Anon / Public Key
-                  </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Supabase Public URL
+                    </label>
+                    <input
+                      type="text"
+                      value={supabaseUrl}
+                      onChange={(e) => setSupabaseUrl(e.target.value)}
+                      placeholder="https://sup.puppylab.cc"
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
+                    />
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      Must route to your Ubuntu Supabase instance (Kong port 8000).
+                    </span>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-semibold text-slate-700">
+                        Supabase Anon / Public Key
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowKey(!showKey)}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-semibold"
+                      >
+                        {showKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        <span>{showKey ? 'Hide Key' : 'Reveal Key'}</span>
+                      </button>
+                    </div>
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      value={supabaseAnonKey}
+                      onChange={(e) => setSupabaseAnonKey(e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
+                    />
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      JWT token starting with <code className="bg-slate-100 px-1 rounded">eyJhbGciOi...</code>
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <div className="text-[11px] text-slate-600">
+                    Need your key? Open{' '}
+                    <a
+                      href="https://sup.puppylab.cc/project/default/settings/api"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-indigo-600 font-semibold underline inline-flex items-center gap-0.5"
+                    >
+                      Supabase Project API Settings <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                    onClick={handleSaveConfig}
+                    className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs flex items-center gap-1.5"
                   >
-                    {showKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                    <span>{showKey ? 'Hide' : 'Reveal'}</span>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save Configuration & Re-test</span>
                   </button>
                 </div>
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={supabaseAnonKey}
-                  onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
-                />
-                <span className="text-[10px] text-slate-500 mt-1 block">
-                  Safe public key for PostgREST & Kong. Saved locally in your browser.
-                </span>
               </div>
-            </div>
+            </>
+          )}
 
-            {/* Quick Helper for finding Anon Key */}
-            <div className="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-900 space-y-1">
-              <div className="font-semibold flex items-center gap-1.5 text-amber-800">
-                <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                Where to get your Supabase Anon Key:
-              </div>
-              <ul className="list-disc list-inside space-y-0.5 text-[10.5px] text-amber-900">
-                <li>
-                  <strong>From Studio UI:</strong> Open{' '}
+          {activeTab === 'revamp' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Database className="w-4 h-4 text-indigo-600" />
+                    How to Revamp Your Database in 1 Step
+                  </h3>
                   <a
-                    href="https://sup.puppylab.cc/project/default/settings/api"
+                    href="https://sup.puppylab.cc/project/default/sql"
                     target="_blank"
                     rel="noreferrer"
-                    className="underline text-indigo-700 font-mono inline-flex items-center gap-0.5"
+                    className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-white px-3 py-1.5 rounded-lg border border-indigo-200 shadow-2xs"
                   >
-                    https://sup.puppylab.cc/project/default/settings/api <ExternalLink className="w-2.5 h-2.5" />
-                  </a>{' '}
-                  &rarr; copy the <strong>anon / public</strong> key.
-                </li>
-                <li>
-                  <strong>From Ubuntu Terminal:</strong> Run{' '}
-                  <code className="bg-amber-100/80 px-1.5 py-0.5 rounded font-mono text-amber-950">
-                    cat /opt/kutumbvault/docker/.env | grep ANON_KEY
-                  </code>
-                </li>
-              </ul>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={handleSaveConfig}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs flex items-center gap-1.5"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Save Configuration & Re-test</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Section Tables Summary */}
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 mb-2 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-slate-600" />
-              Connected Tables in Supabase (11 Sections):
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {[
-                { name: 'family_members', desc: 'Couples, children, dependent parents' },
-                { name: 'important_contacts', desc: 'Doctors, lawyers, CA, HR, Mom' },
-                { name: 'financial_documents', desc: '19 IDs + locations & expiry notes' },
-                { name: 'online_accounts', desc: 'Zerodha, Golden Pi, Wint Wealth, CDSL' },
-                { name: 'investment_accounts', desc: 'Mutual funds, Demat, PPF, EPF, FDs' },
-                { name: 'insurance_policies', desc: 'Life, health floater, motor policies' },
-                { name: 'locker_details', desc: 'Bank safe deposit lockers & keys' },
-                { name: 'card_details', desc: 'Debit and credit cards' },
-                { name: 'property_details', desc: 'Real estate deeds & area records' },
-                { name: 'liability_details', desc: 'Bank loans, EMIs, and terms' },
-                { name: 'online_passwords', desc: 'Emergency access trustees & 2FA' },
-              ].map((tbl) => (
-                <div key={tbl.name} className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                  <code className="font-mono font-bold text-indigo-700 block">{tbl.name}</code>
-                  <span className="text-[11px] text-slate-500">{tbl.desc}</span>
+                    <span>Open Supabase SQL Editor</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Quick Schema Fix Box (For missing columns or tables) */}
-          <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/60 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-amber-700" />
-                <span className="font-bold text-xs text-amber-950">
-                  Quick SQL Fix: Add 'mobile' column & 'investment_accounts' table
-                </span>
+                <p className="text-[11.5px] text-slate-600 leading-relaxed">
+                  This master script cleanly drops any mismatched or incomplete tables, recreates all <strong>11 dedicated tables</strong> with exact columns, sets up the <strong>vault_documents</strong> storage bucket for document hosting, enables RLS, creates compatibility views, and notifies PostgREST to reload its schema cache.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleCopySql}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs"
+                  >
+                    {copiedSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedSql ? 'Copied to Clipboard!' : 'Copy Master Revamp SQL'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSql}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors shadow-2xs"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download .sql File</span>
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <a
-                  href="https://sup.puppylab.cc/project/default/sql"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 bg-white px-2.5 py-1 rounded-md border border-slate-200 shadow-2xs"
-                >
-                  <span>Open SQL Editor</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(SUPABASE_QUICK_FIX_SQL);
-                    setCopiedFixSql(true);
-                    setTimeout(() => setCopiedFixSql(false), 2500);
-                  }}
-                  className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-md transition-colors shadow-2xs"
-                >
-                  {copiedFixSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedFixSql ? 'Copied!' : 'Copy Quick Fix SQL'}</span>
-                </button>
-              </div>
-            </div>
-            <p className="text-[11px] text-amber-900">
-              Run this 4-line snippet in Supabase SQL Editor to instantly ensure the <code className="bg-amber-100 px-1 rounded">mobile</code> column and <code className="bg-amber-100 px-1 rounded">investment_accounts</code> table are ready and schema cache is reloaded.
-            </p>
-            <pre className="p-3 bg-slate-900 text-amber-300 rounded-lg font-mono text-[10.5px] overflow-x-auto max-h-32 leading-relaxed">
-              {SUPABASE_QUICK_FIX_SQL}
-            </pre>
-          </div>
 
-          {/* SQL Reference Box */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                <HardDrive className="w-4 h-4 text-emerald-600" />
-                SQL Schema Reference
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleDownloadSql}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download .sql</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCopySql}
-                  className="inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors"
-                >
-                  {copiedSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedSql ? 'Copied!' : 'Copy SQL'}</span>
-                </button>
+              {/* Steps Guide */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {PROXMOX_SETUP_GUIDE_STEPS.map((step) => (
+                  <div key={step.step} className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10.5px] font-bold">
+                        {step.step}
+                      </span>
+                      <h4 className="font-bold text-slate-900 text-xs">{step.title}</h4>
+                    </div>
+                    <p className="text-[10.5px] text-slate-500">{step.description}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* SQL Code View */}
+              <div className="relative">
+                <div className="flex items-center justify-between p-2 bg-slate-800 text-slate-300 rounded-t-xl text-[11px] font-mono px-4">
+                  <span>kutumbvault_revamp_schema.sql</span>
+                  <span className="text-[10px] text-slate-400">PostgreSQL (11 Tables + Storage Bucket)</span>
+                </div>
+                <pre className="p-4 bg-slate-900 text-emerald-300 rounded-b-xl font-mono text-[11px] overflow-x-auto max-h-72 leading-relaxed">
+                  {SUPABASE_SQL_SCHEMA}
+                </pre>
               </div>
             </div>
+          )}
 
-            <div className="relative">
-              <pre className="p-4 bg-slate-900 text-slate-200 rounded-xl font-mono text-[11px] overflow-x-auto max-h-48 leading-relaxed">
-                {SUPABASE_SQL_SCHEMA}
-              </pre>
+          {activeTab === 'specs' && (
+            <div className="space-y-4">
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+                <h3 className="font-bold text-slate-900 text-xs flex items-center gap-2 mb-1">
+                  <FileCheck className="w-4 h-4 text-emerald-600" />
+                  Frontend Section & Document Hosting Review
+                </h3>
+                <p className="text-[11px] text-slate-600">
+                  Here is the architectural review of all 11 sections in KutumbVault, their dedicated table names, expected column fields, and document hosting requirements.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {VAULT_SECTIONS_SPECIFICATION.map((spec) => (
+                  <div
+                    key={spec.sectionKey}
+                    className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 transition-colors space-y-2 shadow-2xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                          {spec.title}
+                        </h4>
+                        <code className="text-[11px] text-indigo-700 font-mono font-semibold">
+                          {spec.tableName}
+                        </code>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {spec.needsDocHosting && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                            <FileText className="w-3 h-3" />
+                            Storage Bucket
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          {spec.columns.length} columns
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500">{spec.description}</p>
+
+                    <div className="pt-1.5 border-t border-slate-100">
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                        Expected Columns:
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {spec.columns.map((c) => (
+                          <span
+                            key={c.name}
+                            className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                              c.isPrimary
+                                ? 'bg-indigo-100 text-indigo-800 font-bold'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                            title={`${c.name} (${c.type}) - ${c.description}`}
+                          >
+                            {c.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Footer */}

@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { VaultState } from '../types/vault.ts';
+import type { VaultState, DocumentAttachment } from '../types/vault.ts';
 import { INITIAL_VAULT_DATA } from '../data/initialVaultData.ts';
 
 const STORAGE_URL_KEY = 'kutumb_supabase_url';
@@ -184,25 +184,27 @@ export async function testSupabaseConnection(customConfig?: { url?: string; anon
   }
 }
 
-// Section table mapping configuration with candidate fallback names
+// Section table mapping configuration directly targeting the 11 primary tables
 export const SECTION_TABLE_MAPPINGS = {
   familyMembers: ['family_members'],
   contacts: ['important_contacts'],
   documents: ['financial_documents'],
   onlineAccounts: ['online_accounts'],
-  investments: ['investment_accounts', 'investment_details'],
+  investments: ['investment_accounts'],
   insurances: ['insurance_policies'],
-  lockers: ['locker_details', 'safe_lockers'],
-  cards: ['card_details', 'bank_cards'],
-  properties: ['property_details', 'properties'],
-  liabilities: ['liability_details', 'liabilities'],
+  lockers: ['safe_lockers'],
+  cards: ['bank_cards'],
+  properties: ['properties'],
+  liabilities: ['liabilities'],
   passwords: ['online_passwords'],
 } as const;
 
 export type SyncSectionKey = keyof typeof SECTION_TABLE_MAPPINGS;
 
 /**
- * Smart upsert with candidate table names and column adaptability
+ * Smart upsert with candidate table names and column adaptability.
+ * Automatically detects missing column errors from Supabase/PostgREST
+ * and strips them in-flight so partial or legacy schemas never fail!
  */
 async function smartUpsert(
   client: SupabaseClient,
@@ -216,64 +218,68 @@ async function smartUpsert(
   let lastError = '';
 
   for (const table of tableCandidates) {
-    // 1. Try upserting original rows
-    const { error } = await client.from(table).upsert(rows);
+    let currentRows = rows.map((r) => ({ ...r }));
+    const strippedCols: string[] = [];
+    let attempts = 0;
+    const maxAttempts = 10;
 
-    if (!error) {
-      return { success: true, tableName: table, message: `${rows.length} rows synced to ${table}` };
-    }
+    while (attempts < maxAttempts) {
+      attempts++;
+      const { error } = await client.from(table).upsert(currentRows);
 
-    lastError = error.message;
-
-    // 2. Handle missing 'mobile' column on important_contacts (e.g. named phone or missing)
-    if (error.message.includes("'mobile' column") || error.message.includes("column \"mobile\"")) {
-      const fallbackRows = rows.map((r) => {
-        const copy = { ...r };
-        delete copy.mobile;
-        copy.phone = r.mobile || '';
-        return copy;
-      });
-      const retryRes = await client.from(table).upsert(fallbackRows);
-      if (!retryRes.error) {
-        return { success: true, tableName: table, message: `${rows.length} rows synced to ${table} (mapped mobile->phone)` };
+      if (!error) {
+        const note = strippedCols.length > 0 ? ` (omitted unmapped: ${strippedCols.join(', ')})` : '';
+        return {
+          success: true,
+          tableName: table,
+          message: `${rows.length} rows synced to ${table}${note}`,
+        };
       }
 
-      // Try omitting mobile entirely
-      const strippedRows = rows.map((r) => {
-        const copy = { ...r };
-        delete copy.mobile;
-        delete copy.phone;
-        return copy;
-      });
-      const strippedRes = await client.from(table).upsert(strippedRows);
-      if (!strippedRes.error) {
-        return { success: true, tableName: table, message: `${rows.length} rows synced to ${table} (without mobile column)` };
+      lastError = error.message;
+
+      // 1. Table missing in schema cache -> break and try next candidate
+      const isTableMissing =
+        error.message.includes('Could not find the table') ||
+        error.message.includes('relation') ||
+        (error as any).code === '42P01' ||
+        (error as any).code === 'PGRST205';
+
+      if (isTableMissing) {
+        break;
       }
-      lastError = strippedRes.error?.message || lastError;
-    }
 
-    // 3. Handle card_number vs cardnumber variations for card_details / bank_cards
-    if (table === 'card_details' || table === 'bank_cards') {
-      const cardMappedRows = rows.map((r) => ({
-        ...r,
-        card_number: r.cardNumber || r.cardnumber || '',
-        cardnumber: r.cardNumber || r.cardnumber || '',
-      }));
-      const retryCard = await client.from(table).upsert(cardMappedRows);
-      if (!retryCard.error) {
-        return { success: true, tableName: table, message: `${rows.length} rows synced to ${table}` };
+      // 2. Missing column in schema cache:
+      // PostgREST: "Could not find the 'mobile' column of 'important_contacts' in the schema cache"
+      // or "column 'name' of relation 'important_contacts' does not exist"
+      const colMatch =
+        error.message.match(/Could not find the ['"]?([a-zA-Z0-9_]+)['"]? column/i) ||
+        error.message.match(/column ['"]?([a-zA-Z0-9_]+)['"]? of relation/i) ||
+        error.message.match(/column ['"]?([a-zA-Z0-9_]+)['"]? does not exist/i);
+
+      if (colMatch && colMatch[1]) {
+        const missingCol = colMatch[1];
+        strippedCols.push(missingCol);
+        currentRows = currentRows.map((r) => {
+          const copy = { ...r };
+          delete copy[missingCol];
+          delete copy[missingCol.toLowerCase()];
+          return copy;
+        });
+        continue; // Retry with stripped column
       }
-    }
 
-    // If table doesn't exist in schema cache, try next candidate
-    const isTableMissing =
-      error.message.includes('Could not find the table') ||
-      error.message.includes('relation') ||
-      (error as any).code === '42P01' ||
-      (error as any).code === 'PGRST205';
+      // 3. Fallback for card variations
+      if (table === 'bank_cards' || table === 'card_details') {
+        currentRows = currentRows.map((r) => ({
+          ...r,
+          card_number: r.card_number || r.cardNumber || r.cardnumber || '',
+          cardnumber: r.card_number || r.cardNumber || r.cardnumber || '',
+        }));
+      }
 
-    if (isTableMissing) {
-      continue;
+      // Non-recoverable error for this candidate
+      break;
     }
   }
 
@@ -286,7 +292,7 @@ async function smartUpsert(
 }
 
 /**
- * Query table with candidate fallbacks
+ * Query table with candidate fallbacks and optional ordering
  */
 async function smartSelect(
   client: SupabaseClient,
@@ -299,7 +305,11 @@ async function smartSelect(
       if (orderCol) {
         query = query.order(orderCol, { ascending: true });
       }
-      const res = await query;
+      let res = await query;
+      // If ordering failed because orderCol doesn't exist, retry unordered
+      if (res.error && orderCol) {
+        res = await client.from(table).select('*');
+      }
       if (!res.error && res.data) {
         return { data: res.data, tableName: table };
       }
@@ -347,6 +357,14 @@ export function transformSectionToRows(section: SyncSectionKey, items: any[]): R
         remarks: d.remarks || '',
         expiry_date: d.expiryDate || '',
         status_note: d.statusNote || '',
+        attachment_id: d.attachment?.id || null,
+        attachment_file_name: d.attachment?.fileName || null,
+        attachment_original_name: d.attachment?.originalName || null,
+        attachment_file_size: d.attachment?.fileSize || null,
+        attachment_mime_type: d.attachment?.mimeType || null,
+        attachment_storage_path: d.attachment?.storagePath || null,
+        attachment_file_url: d.attachment?.fileUrl || null,
+        attachment_uploaded_at: d.attachment?.uploadedAt || null,
       }));
 
     case 'onlineAccounts':
@@ -834,6 +852,56 @@ export async function pullVaultFromSupabase(
     };
 
     return { success: true, data: state };
+  } catch (err: any) {
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * Direct file upload to Supabase Storage bucket 'vault_documents'
+ * Enables document hosting directly from the browser (e.g. on Cloudflare Pages)
+ */
+export async function uploadDocumentToSupabaseStorage(
+  file: File,
+  docId: string
+): Promise<{ success: boolean; attachment?: DocumentAttachment; message?: string }> {
+  const client = await getSupabaseClient();
+  if (!client) {
+    return { success: false, message: 'Supabase client not initialized' };
+  }
+
+  const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = `${docId}/${Date.now()}_${cleanName}`;
+
+  try {
+    const { error: uploadError } = await client.storage
+      .from('vault_documents')
+      .upload(filePath, file, {
+        upsert: true,
+        cacheControl: '3600',
+        contentType: file.type || 'application/octet-stream',
+      });
+
+    if (uploadError) {
+      return { success: false, message: `Storage upload failed: ${uploadError.message}` };
+    }
+
+    const { data: publicUrlData } = client.storage
+      .from('vault_documents')
+      .getPublicUrl(filePath);
+
+    const attachment: DocumentAttachment = {
+      id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      fileName: file.name,
+      originalName: file.name,
+      fileSize: file.size,
+      mimeType: file.type || 'application/octet-stream',
+      storagePath: filePath,
+      fileUrl: publicUrlData?.publicUrl || '',
+      uploadedAt: new Date().toISOString(),
+    };
+
+    return { success: true, attachment, message: 'Uploaded to Supabase Storage' };
   } catch (err: any) {
     return { success: false, message: err.message };
   }
