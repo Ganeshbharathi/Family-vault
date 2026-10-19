@@ -4,8 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createServer as createViteServer } from 'vite';
-import { INITIAL_VAULT_DATA } from './src/data/initialVaultData.ts';
-import { SUPABASE_SQL_SCHEMA } from './src/data/supabaseSchema.ts';
+import { INITIAL_VAULT_DATA } from './src/initialData.ts';
+import { SUPABASE_SQL_SCHEMA } from './src/supabaseSchema.ts';
 
 dotenv.config();
 

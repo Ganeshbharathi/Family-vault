@@ -11,7 +11,7 @@ import {
   FileKey,
   Smartphone,
 } from 'lucide-react';
-import { OnlinePasswordEntry } from '../../types/vault.ts';
+import { OnlinePasswordEntry } from './types.ts';
 
 interface PasswordsAccessTabProps {
   passwords: OnlinePasswordEntry[];

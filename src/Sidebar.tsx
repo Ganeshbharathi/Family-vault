@@ -11,16 +11,8 @@ import {
   BookOpen,
 } from 'lucide-react';
 
-export type TabKey =
-  | 'overview'
-  | 'contacts'
-  | 'documents'
-  | 'investments'
-  | 'insurance'
-  | 'banking'
-  | 'assets_liabilities'
-  | 'passwords'
-  | 'binder';
+import type { TabKey } from './types.ts';
+export type { TabKey };
 
 interface SidebarProps {
   currentTab: TabKey;

@@ -13,9 +13,8 @@ import {
   Calendar,
   Sparkles,
 } from 'lucide-react';
-import { VaultState } from '../../types/vault.ts';
-import { calculateReadinessScore, maskSensitive } from '../../utils/vaultCalculations.ts';
-import { TabKey } from '../Sidebar.tsx';
+import { VaultState, TabKey } from './types.ts';
+import { calculateReadinessScore, maskSensitive } from './calculations.ts';
 
 interface OverviewTabProps {
   vault: VaultState;

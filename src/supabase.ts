@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { VaultState, DocumentAttachment } from '../types/vault.ts';
-import { INITIAL_VAULT_DATA } from '../data/initialVaultData.ts';
+import type { VaultState, DocumentAttachment } from './types.ts';
+import { INITIAL_VAULT_DATA } from './initialData.ts';
 
 const STORAGE_URL_KEY = 'kutumb_supabase_url';
 const STORAGE_ANON_KEY = 'kutumb_supabase_anon_key';

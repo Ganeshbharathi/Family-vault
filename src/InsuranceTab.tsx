@@ -11,8 +11,8 @@ import {
   UserCheck,
   CheckCircle2,
 } from 'lucide-react';
-import { InsurancePolicy } from '../../types/vault.ts';
-import { maskSensitive } from '../../utils/vaultCalculations.ts';
+import { InsurancePolicy } from './types.ts';
+import { maskSensitive } from './calculations.ts';
 
 interface InsuranceTabProps {
   insurances: InsurancePolicy[];

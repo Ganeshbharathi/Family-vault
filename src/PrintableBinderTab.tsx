@@ -12,8 +12,8 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react';
-import { VaultState } from '../../types/vault.ts';
-import { maskSensitive } from '../../utils/vaultCalculations.ts';
+import { VaultState } from './types.ts';
+import { maskSensitive } from './calculations.ts';
 
 interface PrintableBinderTabProps {
   vault: VaultState;

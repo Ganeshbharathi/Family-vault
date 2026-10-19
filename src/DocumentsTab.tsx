@@ -16,9 +16,9 @@ import {
   Paperclip,
   Check,
 } from 'lucide-react';
-import { FinancialDocument, DocumentAttachment } from '../../types/vault.ts';
-import { checkExpiryStatus, maskSensitive } from '../../utils/vaultCalculations.ts';
-import { DocumentPreviewModal } from '../modals/DocumentPreviewModal.tsx';
+import { FinancialDocument, DocumentAttachment } from './types.ts';
+import { checkExpiryStatus, maskSensitive } from './calculations.ts';
+import { DocumentPreviewModal } from './DocumentPreviewModal.tsx';
 
 interface DocumentsTabProps {
   documents: FinancialDocument[];

@@ -4,14 +4,14 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { VaultState, FinancialDocument, DocumentAttachment } from './types/vault.ts';
-import { INITIAL_VAULT_DATA } from './data/initialVaultData.ts';
-import { exportVaultToCsv, checkExpiryStatus } from './utils/vaultCalculations.ts';
+import { VaultState, FinancialDocument, DocumentAttachment } from './types.ts';
+import { INITIAL_VAULT_DATA } from './initialData.ts';
+import { exportVaultToCsv, checkExpiryStatus } from './calculations.ts';
 
-import { Navbar } from './components/Navbar.tsx';
-import { Sidebar, TabKey } from './components/Sidebar.tsx';
-import { GlobalSearchModal } from './components/GlobalSearchModal.tsx';
-import { SupabaseGuideModal } from './components/modals/SupabaseGuideModal.tsx';
+import { Navbar } from './Navbar.tsx';
+import { Sidebar, TabKey } from './Sidebar.tsx';
+import { GlobalSearchModal } from './GlobalSearchModal.tsx';
+import { SupabaseGuideModal } from './SupabaseGuideModal.tsx';
 import {
   testSupabaseConnection,
   pullVaultFromSupabase,
@@ -19,17 +19,17 @@ import {
   syncSectionToSupabase,
   uploadDocumentToSupabaseStorage,
   SyncSectionKey,
-} from './services/supabaseClient.ts';
+} from './supabase.ts';
 
-import { OverviewTab } from './components/tabs/OverviewTab.tsx';
-import { ContactsTab } from './components/tabs/ContactsTab.tsx';
-import { DocumentsTab } from './components/tabs/DocumentsTab.tsx';
-import { InvestmentsTab } from './components/tabs/InvestmentsTab.tsx';
-import { InsuranceTab } from './components/tabs/InsuranceTab.tsx';
-import { BankingCardsTab } from './components/tabs/BankingCardsTab.tsx';
-import { AssetsLiabilitiesTab } from './components/tabs/AssetsLiabilitiesTab.tsx';
-import { PasswordsAccessTab } from './components/tabs/PasswordsAccessTab.tsx';
-import { PrintableBinderTab } from './components/tabs/PrintableBinderTab.tsx';
+import { OverviewTab } from './OverviewTab.tsx';
+import { ContactsTab } from './ContactsTab.tsx';
+import { DocumentsTab } from './DocumentsTab.tsx';
+import { InvestmentsTab } from './InvestmentsTab.tsx';
+import { InsuranceTab } from './InsuranceTab.tsx';
+import { BankingCardsTab } from './BankingCardsTab.tsx';
+import { AssetsLiabilitiesTab } from './AssetsLiabilitiesTab.tsx';
+import { PasswordsAccessTab } from './PasswordsAccessTab.tsx';
+import { PrintableBinderTab } from './PrintableBinderTab.tsx';
 
 const STORAGE_KEY = 'kutumb_vault_data_v1';
 
@@ -440,10 +440,10 @@ export default function App() {
         lastUpdated={vault.currentDate}
       />
 
-      {/* Main Container */}
-      <div className="flex-1 w-full max-w-[1920px] mx-auto px-3 sm:px-4 lg:px-6 py-5 flex gap-4 xl:gap-6">
+      {/* Main Container - Full-width layout minimizing empty margins */}
+      <div className="flex-1 w-full max-w-full px-2 sm:px-3 lg:px-5 py-3.5 flex gap-3 xl:gap-4">
         {/* Desktop Sidebar */}
-        <aside className="hidden lg:block w-64 shrink-0 bg-white border border-slate-200 rounded-xl p-2 h-[calc(100vh-6.5rem)] sticky top-20 shadow-xs">
+        <aside className="hidden lg:block w-56 xl:w-60 shrink-0 bg-white border border-slate-200 rounded-xl p-2 h-[calc(100vh-5.5rem)] sticky top-20 shadow-xs">
           <Sidebar
             currentTab={currentTab}
             onSelectTab={setCurrentTab}

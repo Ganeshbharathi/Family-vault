@@ -1,4 +1,4 @@
-import type { VaultState, FinancialDocument, ImportantContact, InvestmentAccount } from '../types/vault.ts';
+import type { VaultState, FinancialDocument, ImportantContact, InvestmentAccount } from './types.ts';
 
 /**
  * Calculates months between a reference date (e.g., Oct 2026) and a given date string.
@@ -341,7 +341,7 @@ export function maskSensitive(value: string, isMasked: boolean, type: 'aadhar' |
   return '••••••';
 }
 
-import type { TabKey } from '../components/Sidebar.tsx';
+import type { TabKey } from './types.ts';
 
 /**
  * Universal search across all items in the vault.

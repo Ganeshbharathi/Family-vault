@@ -152,3 +152,14 @@ export interface VaultState {
   liabilities: LiabilityDetail[];
   investments: InvestmentAccount[];
 }
+
+export type TabKey =
+  | 'overview'
+  | 'contacts'
+  | 'documents'
+  | 'investments'
+  | 'insurance'
+  | 'banking'
+  | 'assets_liabilities'
+  | 'passwords'
+  | 'binder';

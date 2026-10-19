@@ -10,7 +10,7 @@ import {
   HardDrive,
   ExternalLink,
 } from 'lucide-react';
-import { FinancialDocument, DocumentAttachment } from '../../types/vault.ts';
+import { FinancialDocument, DocumentAttachment } from './types.ts';
 
 interface DocumentPreviewModalProps {
   document: FinancialDocument | null;

@@ -23,7 +23,7 @@ import {
   SUPABASE_SQL_SCHEMA,
   VAULT_SECTIONS_SPECIFICATION,
   PROXMOX_SETUP_GUIDE_STEPS,
-} from '../../data/supabaseSchema.ts';
+} from './supabaseSchema.ts';
 import {
   getClientConfig,
   saveClientConfig,
@@ -31,8 +31,8 @@ import {
   testSupabaseConnection,
   pushVaultToSupabase,
   pullVaultFromSupabase,
-} from '../../services/supabaseClient.ts';
-import type { VaultState } from '../../types/vault.ts';
+} from './supabase.ts';
+import type { VaultState } from './types.ts';
 
 interface SupabaseGuideModalProps {
   isOpen: boolean;

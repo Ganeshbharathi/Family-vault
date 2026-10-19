@@ -11,8 +11,8 @@ import {
   Check,
   Building,
 } from 'lucide-react';
-import { OnlineAccount, InvestmentAccount } from '../../types/vault.ts';
-import { maskSensitive } from '../../utils/vaultCalculations.ts';
+import { OnlineAccount, InvestmentAccount } from './types.ts';
+import { maskSensitive } from './calculations.ts';
 
 interface InvestmentsTabProps {
   onlineAccounts: OnlineAccount[];

@@ -7,8 +7,8 @@ import {
   maskSensitive,
   searchVault,
   exportVaultToCsv,
-} from './vaultCalculations.ts';
-import { INITIAL_VAULT_DATA } from '../data/initialVaultData.ts';
+} from './calculations.ts';
+import { INITIAL_VAULT_DATA } from './initialData.ts';
 
 test('parseDateString parses day-month-year correctly', () => {
   const d1 = parseDateString('31-Aug-2027');

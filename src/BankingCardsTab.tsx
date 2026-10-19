@@ -10,8 +10,8 @@ import {
   Building,
   UserCheck,
 } from 'lucide-react';
-import { CardDetail, LockerDetail } from '../../types/vault.ts';
-import { maskSensitive } from '../../utils/vaultCalculations.ts';
+import { CardDetail, LockerDetail } from './types.ts';
+import { maskSensitive } from './calculations.ts';
 
 interface BankingCardsTabProps {
   cards: CardDetail[];

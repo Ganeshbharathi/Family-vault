@@ -9,7 +9,7 @@ import {
   Receipt,
   FileCheck,
 } from 'lucide-react';
-import { PropertyDetail, LiabilityDetail } from '../../types/vault.ts';
+import { PropertyDetail, LiabilityDetail } from './types.ts';
 
 interface AssetsLiabilitiesTabProps {
   properties: PropertyDetail[];

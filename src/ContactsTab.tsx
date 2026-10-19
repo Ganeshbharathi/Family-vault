@@ -11,8 +11,10 @@ import {
   Trash2,
   X,
   ExternalLink,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
-import { ImportantContact, FamilyMember } from '../../types/vault.ts';
+import { ImportantContact, FamilyMember } from './types.ts';
 
 interface ContactsTabProps {
   familyMembers: FamilyMember[];
@@ -68,6 +70,229 @@ function calculateAge(dobStr?: string): { age: number; formatted: string } | nul
   return { age, formatted: `${age} yrs` };
 }
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+interface DatePickerDropdownProps {
+  value: string;
+  onChange: (dateStr: string) => void;
+  onClose: () => void;
+}
+
+const DatePickerDropdown: React.FC<DatePickerDropdownProps> = ({ value, onChange, onClose }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [viewDate, setViewDate] = useState(() => {
+    if (value && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+      const [y, m, d] = value.trim().split('-').map(Number);
+      return new Date(y, m - 1, d || 1);
+    }
+    return new Date();
+  });
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [onClose]);
+
+  const firstDayOfWeek = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+
+  const handlePrevMonth = () => {
+    setViewDate(new Date(year, month - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setViewDate(new Date(year, month + 1, 1));
+  };
+
+  const handleSelectDay = (day: number) => {
+    const mm = String(month + 1).padStart(2, '0');
+    const dd = String(day).padStart(2, '0');
+    onChange(`${year}-${mm}-${dd}`);
+    onClose();
+  };
+
+  const handleToday = () => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    onChange(`${yyyy}-${mm}-${dd}`);
+    onClose();
+  };
+
+  const handleClear = () => {
+    onChange('');
+    onClose();
+  };
+
+  const currentYear = new Date().getFullYear();
+  const years: number[] = [];
+  for (let y = currentYear + 1; y >= 1930; y--) {
+    years.push(y);
+  }
+
+  const days: { day: number; isCurrentMonth: boolean }[] = [];
+  for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+    days.push({ day: daysInPrevMonth - i, isCurrentMonth: false });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    days.push({ day: d, isCurrentMonth: true });
+  }
+  const remaining = (7 - (days.length % 7)) % 7;
+  for (let d = 1; d <= remaining; d++) {
+    days.push({ day: d, isCurrentMonth: false });
+  }
+
+  const selectedDay = (() => {
+    if (value && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+      const [y, m, d] = value.trim().split('-').map(Number);
+      if (y === year && m - 1 === month) {
+        return d;
+      }
+    }
+    return null;
+  })();
+
+  const todayDate = new Date();
+  const isCurrentMonthToday = todayDate.getFullYear() === year && todayDate.getMonth() === month;
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-2xl p-3 w-64 text-slate-800 select-none font-sans"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Month & Year Select Header */}
+      <div className="flex items-center justify-between gap-1 mb-2">
+        <button
+          type="button"
+          onClick={handlePrevMonth}
+          className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition-colors"
+          title="Previous month"
+        >
+          <ChevronLeft className="w-3.5 h-3.5" />
+        </button>
+
+        <div className="flex items-center gap-1">
+          <select
+            value={month}
+            onChange={(e) => setViewDate(new Date(year, Number(e.target.value), 1))}
+            className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+          >
+            {MONTH_NAMES.map((m, idx) => (
+              <option key={m} value={idx}>{m.slice(0, 3)}</option>
+            ))}
+          </select>
+
+          <select
+            value={year}
+            onChange={(e) => setViewDate(new Date(Number(e.target.value), month, 1))}
+            className="text-xs font-mono font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+          >
+            {years.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleNextMonth}
+          className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition-colors"
+          title="Next month"
+        >
+          <ChevronRight className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Weekday initials */}
+      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 mb-1">
+        <span>Su</span>
+        <span>Mo</span>
+        <span>Tu</span>
+        <span>We</span>
+        <span>Th</span>
+        <span>Fr</span>
+        <span>Sa</span>
+      </div>
+
+      {/* Days grid */}
+      <div className="grid grid-cols-7 gap-1 text-center">
+        {days.map((item, index) => {
+          if (!item.isCurrentMonth) {
+            return (
+              <span
+                key={index}
+                className="h-6 w-6 mx-auto flex items-center justify-center text-[10px] text-slate-300 font-mono"
+              >
+                {item.day}
+              </span>
+            );
+          }
+
+          const isSelected = item.day === selectedDay;
+          const isToday = isCurrentMonthToday && todayDate.getDate() === item.day;
+
+          return (
+            <button
+              key={index}
+              type="button"
+              onClick={() => handleSelectDay(item.day)}
+              className={`h-6 w-6 mx-auto flex items-center justify-center text-[11px] font-mono rounded transition-colors ${
+                isSelected
+                  ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                  : isToday
+                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-300'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {item.day}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Bottom quick actions */}
+      <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
+        <button
+          type="button"
+          onClick={handleToday}
+          className="font-semibold text-indigo-600 hover:text-indigo-800 px-1 py-0.5 rounded"
+        >
+          Today
+        </button>
+        <button
+          type="button"
+          onClick={handleClear}
+          className="text-slate-400 hover:text-rose-600 px-1 py-0.5 rounded"
+        >
+          Clear
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-slate-400 hover:text-slate-700 font-medium px-1 py-0.5 rounded"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const ContactsTab: React.FC<ContactsTabProps> = ({
   familyMembers,
   contacts,
@@ -98,7 +323,8 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
   const [addingPhoneForId, setAddingPhoneForId] = useState<string | null>(null);
   const [newPhoneDraft, setNewPhoneDraft] = useState('');
 
-  const dateInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  // Dropdown interactive calendar state (safe for cross-origin iframes)
+  const [openCalendarId, setOpenCalendarId] = useState<string | null>(null);
 
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -620,33 +846,28 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                             placeholder="YYYY-MM-DD"
                             className="w-full pl-2 pr-7 py-1 text-xs font-mono text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded transition-colors"
                           />
-                          {/* Hidden native date input triggered by calendar button */}
-                          <input
-                            ref={(el) => {
-                              dateInputRefs.current[contact.id] = el;
-                            }}
-                            type="date"
-                            value={contact.dob || ''}
-                            onChange={(e) => handleInlineChange(contact, 'dob', e.target.value)}
-                            className="absolute opacity-0 pointer-events-none w-0 h-0 right-0 top-0"
-                          />
                           <button
                             type="button"
-                            onClick={() => {
-                              const input = dateInputRefs.current[contact.id];
-                              if (input) {
-                                if ('showPicker' in input && typeof (input as any).showPicker === 'function') {
-                                  (input as any).showPicker();
-                                } else {
-                                  input.focus();
-                                }
-                              }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenCalendarId(openCalendarId === contact.id ? null : contact.id);
                             }}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-indigo-600 rounded transition-colors"
-                            title="Open Calendar Picker"
+                            className={`absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded transition-colors ${
+                              openCalendarId === contact.id ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400 hover:text-indigo-600'
+                            }`}
+                            title="Open Calendar Dropdown"
                           >
                             <Calendar className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Safe Dropdown Calendar Picker (No iframe SecurityError) */}
+                          {openCalendarId === contact.id && (
+                            <DatePickerDropdown
+                              value={contact.dob || ''}
+                              onChange={(val) => handleInlineChange(contact, 'dob', val)}
+                              onClose={() => setOpenCalendarId(null)}
+                            />
+                          )}
                         </div>
 
                         {/* Calculated Running Age */}

@@ -1,4 +1,4 @@
-import type { VaultState } from '../types/vault.ts';
+import type { VaultState } from './types.ts';
 
 export const INITIAL_VAULT_DATA: VaultState = {
   currentDate: '15-Oct-2026',

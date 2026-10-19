@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, ArrowRight } from 'lucide-react';
-import { VaultState } from '../types/vault.ts';
-import { searchVault, SearchResultItem } from '../utils/vaultCalculations.ts';
+import { VaultState } from './types.ts';
+import { searchVault, SearchResultItem } from './calculations.ts';
 import { TabKey } from './Sidebar.tsx';
 
 interface GlobalSearchModalProps {
