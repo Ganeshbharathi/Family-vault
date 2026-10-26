@@ -1,4 +1,4 @@
-name: Deploy KutumbVault to GitHub Pages
+name: Deploy KutumbVault V2
 
 on:
   push:
