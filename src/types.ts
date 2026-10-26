@@ -44,12 +44,15 @@ export interface FinancialDocument {
   srNo: number;
   documentName: string;
   documentNumber: string;
-  physicalLocation: string;
-  virtualLocation: string;
+  physicalLocation?: string;
+  virtualLocation?: string;
   remarks?: string;
   expiryDate?: string; // e.g., '31-Aug-2027', '29-Apr-2038', '8 Jun 2026'
-  statusNote?: string; // 'Going to Expire Soon/Next Year' or 'FALSE'
+  statusNote?: string; // 'Going to Expire Soon/Next Year' or 'Active & Valid'
+  personTag?: string; // Mandatory person tag e.g. 'Self', 'Spouse', 'MOM'
+  tags?: string[]; // Multiple tags e.g. ['Identity', 'Tax', 'Banking', 'Property']
   attachment?: DocumentAttachment;
+  attachments?: DocumentAttachment[]; // Support multiple uploads for a single document
 }
 
 export interface LockerDetail {
@@ -137,11 +140,28 @@ export interface InvestmentAccount {
   remarks?: string;
 }
 
+export interface TrashedAttachment {
+  id: string;
+  docId: string;
+  documentName: string;
+  attachment: DocumentAttachment;
+  deletedAt: string;
+}
+
+export interface PersonRecord {
+  id: string;
+  name: string;
+  relationship?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
 export interface VaultState {
   currentDate: string; // e.g. '15-Oct-2026'
   currentYear: number;
   familyMembers: FamilyMember[];
   contacts: ImportantContact[];
+  people?: PersonRecord[]; // Centralized people list
   onlineAccounts: OnlineAccount[];
   documents: FinancialDocument[];
   lockers: LockerDetail[];
@@ -151,15 +171,19 @@ export interface VaultState {
   properties: PropertyDetail[];
   liabilities: LiabilityDetail[];
   investments: InvestmentAccount[];
+  trashDocuments?: (FinancialDocument & { deletedAt?: string })[];
+  trashAttachments?: TrashedAttachment[];
 }
 
 export type TabKey =
   | 'overview'
   | 'contacts'
+  | 'people'
   | 'documents'
   | 'investments'
   | 'insurance'
   | 'banking'
   | 'assets_liabilities'
   | 'passwords'
-  | 'binder';
+  | 'binder'
+  | 'trash';

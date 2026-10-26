@@ -61,7 +61,6 @@ app.get('/api/status', async (req, res) => {
   }
 
   try {
-    // Ping family_members or check health
     const { data, error } = await supabase.from('family_members').select('id').limit(1);
     if (error) {
       return res.json({
@@ -143,6 +142,7 @@ app.get('/api/vault', async (req, res) => {
         srNo: c.sr_no,
         particulars: c.particulars,
         name: c.name || '',
+        dob: c.dob || '',
         mobile: c.mobile || '',
         email: c.email || '',
         address: c.address || '',
@@ -199,8 +199,8 @@ app.get('/api/vault', async (req, res) => {
         id: p.id,
         srNo: p.sr_no,
         type: p.type,
-        policyName: p.policy_name,
-        policyNumber: p.policy_number,
+        policy_name: p.policy_name,
+        policy_number: p.policy_number,
         coveredPerson: p.covered_person || '',
         amountInsured: p.amount_insured || '',
         nominee: p.nominee || '',
@@ -243,18 +243,18 @@ app.get('/api/vault', async (req, res) => {
       })) || [],
       liabilities: liaRes.data?.map((l: any) => ({
         id: l.id,
-        srNo: l.sr_no,
+        sr_no: l.sr_no,
         bankOrLender: l.bank_or_lender,
-        liabilityType: l.liability_type,
+        liability_type: l.liability_type,
         amount: l.amount,
         terms: l.terms || '',
         remarks: l.remarks || '',
       })) || [],
       passwords: pwdRes.data?.map((w: any) => ({
         id: w.id,
-        srNo: w.sr_no,
-        loginKind: w.login_kind,
-        personAware: w.person_aware,
+        sr_no: w.sr_no,
+        login_kind: w.login_kind,
+        person_aware: w.person_aware,
         remarks: w.remarks || '',
         instructions: w.instructions || '',
       })) || [],
@@ -276,7 +276,6 @@ app.post('/api/vault/sync', async (req, res) => {
   const vault = (req.body && Object.keys(req.body).length > 0) ? req.body : INITIAL_VAULT_DATA;
 
   try {
-    const results: Record<string, string> = {};
     // 1. Family Members
     if (vault.familyMembers?.length) {
       const rows = vault.familyMembers.map((m: any) => ({
@@ -296,6 +295,7 @@ app.post('/api/vault/sync', async (req, res) => {
         sr_no: c.srNo,
         particulars: c.particulars,
         name: c.name || '',
+        dob: c.dob || '',
         mobile: c.mobile || '',
         email: c.email || '',
         address: c.address || '',
@@ -598,6 +598,73 @@ app.post('/api/documents/delete-file', async (req, res) => {
 app.get('/api/supabase/schema.sql', (req, res) => {
   res.setHeader('Content-Type', 'text/plain');
   res.send(SUPABASE_SQL_SCHEMA);
+});
+
+// 8. Upsert single contact row immediately
+app.post('/api/contacts/sync-row', async (req, res) => {
+  const c = req.body;
+  if (!c || !c.id) {
+    return res.status(400).json({ error: 'Missing contact id' });
+  }
+
+  if (!supabase) {
+    return res.json({
+      success: true,
+      localOnly: true,
+      message: `Contact "${c.particulars || c.id}" staged (Connect Supabase in navbar to push live)`,
+    });
+  }
+
+  try {
+    const row = {
+      id: c.id,
+      sr_no: c.srNo ?? c.sr_no ?? 1,
+      particulars: c.particulars || '',
+      name: c.name || '',
+      dob: c.dob || '',
+      mobile: c.mobile || '',
+      email: c.email || '',
+      address: c.address || '',
+      remarks: c.remarks || '',
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from('important_contacts').upsert(row);
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ success: true, message: `Contact ${c.particulars || c.id} synced to Supabase` });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Delete single contact row immediately
+app.delete('/api/contacts/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ error: 'Missing contact id' });
+  }
+
+  if (!supabase) {
+    return res.json({
+      success: true,
+      localOnly: true,
+      message: `Contact ${id} deleted locally`,
+    });
+  }
+
+  try {
+    const { error } = await supabase.from('important_contacts').delete().eq('id', id);
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ success: true, message: `Contact ${id} deleted from Supabase` });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // -----------------------------------------------------------------------------

@@ -126,7 +126,7 @@ export const PrintableBinderTab: React.FC<PrintableBinderTabProps> = ({
         <div className="space-y-3">
           <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900 border-b border-slate-200 pb-1.5 flex items-center gap-2">
             <FileText className="w-4 h-4 text-indigo-600 no-print" />
-            2. Important Financial Documents & Locations
+            2. Important Family Documents
           </h2>
           <table className="w-full text-left text-xs border border-slate-200 border-collapse">
             <thead>
@@ -134,9 +134,9 @@ export const PrintableBinderTab: React.FC<PrintableBinderTabProps> = ({
                 <th className="p-2 w-10 text-center">#</th>
                 <th className="p-2">Document Name</th>
                 <th className="p-2">Document Number</th>
-                <th className="p-2">Physical Location</th>
-                <th className="p-2">Virtual Location</th>
-                <th className="p-2">Expiry Date / Note</th>
+                <th className="p-2">Person & TAGs</th>
+                <th className="p-2">Expiry Date</th>
+                <th className="p-2">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -145,9 +145,16 @@ export const PrintableBinderTab: React.FC<PrintableBinderTabProps> = ({
                   <td className="p-2 text-center font-mono">{d.srNo}</td>
                   <td className="p-2 font-semibold">{d.documentName}</td>
                   <td className="p-2 font-mono">{maskSensitive(d.documentNumber, isMasked, 'generic') || '—'}</td>
-                  <td className="p-2">{d.physicalLocation || '—'}</td>
-                  <td className="p-2">{d.virtualLocation || '—'}</td>
-                  <td className="p-2 font-mono">{d.expiryDate || d.statusNote || '—'}</td>
+                  <td className="p-2">
+                    <span className="font-semibold text-indigo-950 bg-indigo-50 px-1.5 py-0.5 rounded mr-1">
+                      {d.personTag || 'Self'}
+                    </span>
+                    {d.tags && d.tags.length > 0 && (
+                      <span className="text-slate-500">[{d.tags.join(', ')}]</span>
+                    )}
+                  </td>
+                  <td className="p-2 font-mono">{d.expiryDate || 'Permanent'}</td>
+                  <td className="p-2 font-medium">{d.statusNote || 'Tracked'}</td>
                 </tr>
               ))}
             </tbody>
@@ -275,7 +282,7 @@ export const PrintableBinderTab: React.FC<PrintableBinderTabProps> = ({
 
         {/* Footer */}
         <div className="pt-6 border-t border-slate-200 text-center text-xs text-slate-400">
-          Generated from Vault · Family Financial Dossier · Confidential Personal Document
+          Generated from KutumbVault · Family Financial Dossier · Confidential Personal Document
         </div>
       </div>
     </div>

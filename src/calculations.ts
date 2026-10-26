@@ -1,4 +1,4 @@
-import type { VaultState, FinancialDocument, ImportantContact, InvestmentAccount } from './types.ts';
+import type { VaultState, FinancialDocument, ImportantContact, InvestmentAccount, TabKey } from './types.ts';
 
 /**
  * Calculates months between a reference date (e.g., Oct 2026) and a given date string.
@@ -304,7 +304,6 @@ export function maskSensitive(value: string, isMasked: boolean, type: 'aadhar' |
   const trimmed = value.trim();
 
   if (type === 'aadhar') {
-    // 7747 7836 9898 -> •••• •••• 9898
     const digitsOnly = trimmed.replace(/\s+/g, '');
     if (digitsOnly.length >= 8) {
       const last4 = digitsOnly.slice(-4);
@@ -321,7 +320,6 @@ export function maskSensitive(value: string, isMasked: boolean, type: 'aadhar' |
   }
 
   if (type === 'pan') {
-    // CFDPG5192R -> CFD•••••2R
     if (trimmed.length === 10) {
       return `${trimmed.slice(0, 3)}•••••${trimmed.slice(-2)}`;
     }
@@ -340,8 +338,6 @@ export function maskSensitive(value: string, isMasked: boolean, type: 'aadhar' |
 
   return '••••••';
 }
-
-import type { TabKey } from './types.ts';
 
 /**
  * Universal search across all items in the vault.
@@ -385,15 +381,17 @@ export function searchVault(vault: VaultState, query: string): SearchResultItem[
     const match =
       d.documentName.toLowerCase().includes(q) ||
       d.documentNumber.toLowerCase().includes(q) ||
-      d.physicalLocation.toLowerCase().includes(q) ||
-      d.virtualLocation.toLowerCase().includes(q) ||
+      (d.physicalLocation && d.physicalLocation.toLowerCase().includes(q)) ||
+      (d.virtualLocation && d.virtualLocation.toLowerCase().includes(q)) ||
+      (d.personTag && d.personTag.toLowerCase().includes(q)) ||
+      (d.tags && d.tags.some((t) => t.toLowerCase().includes(q))) ||
       (d.remarks && d.remarks.toLowerCase().includes(q));
     if (match) {
       results.push({
         id: d.id,
         category: 'Documents',
         title: d.documentName,
-        subtitle: `No: ${d.documentNumber || 'Unassigned'} · Loc: ${d.physicalLocation || d.virtualLocation || 'Not filed'}`,
+        subtitle: `No: ${d.documentNumber || 'Unassigned'} · Person: ${d.personTag || 'Self'}`,
         tag: 'Document',
         tabKey: 'documents',
       });
@@ -589,4 +587,78 @@ export function exportVaultToCsv(vault: VaultState): string {
   });
 
   return lines.join('\n');
+}
+
+/**
+ * Reorders a list of documents by dragging a document and dropping it above or below another document.
+ * Returns a new array with updated sequential srNo values (1, 2, 3...).
+ */
+export function reorderDocumentsList(
+  documents: FinancialDocument[],
+  draggedId: string,
+  targetId: string,
+  position: 'above' | 'below'
+): FinancialDocument[] {
+  const current = [...documents];
+  const sourceIndex = current.findIndex((d) => d.id === draggedId);
+  const targetIndex = current.findIndex((d) => d.id === targetId);
+
+  if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) {
+    return current;
+  }
+
+  const [draggedItem] = current.splice(sourceIndex, 1);
+  let insertIndex = current.findIndex((d) => d.id === targetId);
+  if (position === 'below') {
+    insertIndex += 1;
+  }
+
+  current.splice(insertIndex, 0, draggedItem);
+  return current.map((doc, idx) => ({
+    ...doc,
+    srNo: idx + 1,
+  }));
+}
+
+/**
+ * Filters documents with Person (single selection) AND Tag (multi-selection, matches ANY of the selected tags)
+ */
+export function filterDocumentsByPersonAndMultiTags(
+  documents: FinancialDocument[],
+  selectedPerson: string,
+  selectedTags: string[],
+  searchQuery: string = ''
+): FinancialDocument[] {
+  return documents.filter((doc) => {
+    // 1. Person filter
+    if (selectedPerson !== 'all') {
+      const docPerson = (doc.personTag || '').toLowerCase();
+      const selected = selectedPerson.toLowerCase();
+      const matchesPerson = docPerson === selected || doc.tags?.some((t) => t.toLowerCase() === selected);
+      if (!matchesPerson) return false;
+    }
+
+    // 2. Multi-select Tag filter (matches if doc has ANY of the selected tags)
+    if (selectedTags && selectedTags.length > 0) {
+      const lowerSelected = selectedTags.map((t) => t.toLowerCase());
+      const matchesTag = doc.tags?.some((t) => lowerSelected.includes(t.toLowerCase()));
+      if (!matchesTag) return false;
+    }
+
+    // 3. Search query
+    if (searchQuery.trim().length > 0) {
+      const q = searchQuery.toLowerCase();
+      const match =
+        doc.documentName.toLowerCase().includes(q) ||
+        doc.documentNumber.toLowerCase().includes(q) ||
+        (doc.personTag && doc.personTag.toLowerCase().includes(q)) ||
+        (doc.tags && doc.tags.some((t) => t.toLowerCase().includes(q))) ||
+        (doc.remarks && doc.remarks.toLowerCase().includes(q)) ||
+        (doc.attachment?.fileName && doc.attachment.fileName.toLowerCase().includes(q)) ||
+        (doc.attachments && doc.attachments.some((a) => a.fileName.toLowerCase().includes(q)));
+      if (!match) return false;
+    }
+
+    return true;
+  });
 }

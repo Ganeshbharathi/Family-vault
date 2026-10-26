@@ -634,7 +634,7 @@ export const SupabaseGuideModal: React.FC<SupabaseGuideModalProps> = ({
         {/* Footer */}
         <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
           <p className="text-[11px] text-slate-500">
-            Vault &bull; End-to-end family privacy running against your personal home cloud.
+            KutumbVault &bull; End-to-end family privacy running against your personal home cloud.
           </p>
           <button
             type="button"

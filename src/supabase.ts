@@ -249,9 +249,7 @@ async function smartUpsert(
         break;
       }
 
-      // 2. Missing column in schema cache:
-      // PostgREST: "Could not find the 'mobile' column of 'important_contacts' in the schema cache"
-      // or "column 'name' of relation 'important_contacts' does not exist"
+      // 2. Missing column in schema cache
       const colMatch =
         error.message.match(/Could not find the ['"]?([a-zA-Z0-9_]+)['"]? column/i) ||
         error.message.match(/column ['"]?([a-zA-Z0-9_]+)['"]? of relation/i) ||
@@ -358,6 +356,8 @@ export function transformSectionToRows(section: SyncSectionKey, items: any[]): R
         remarks: d.remarks || '',
         expiry_date: d.expiryDate || '',
         status_note: d.statusNote || '',
+        person_tag: d.personTag || 'Self',
+        tags: d.tags || [],
         attachment_id: d.attachment?.id || null,
         attachment_file_name: d.attachment?.fileName || null,
         attachment_original_name: d.attachment?.originalName || null,
@@ -507,19 +507,37 @@ export async function syncSingleRecord(
   section: SyncSectionKey,
   record: any
 ): Promise<{ success: boolean; message: string }> {
+  // 1. Try direct browser Supabase client
   const client = await getSupabaseClient();
-  if (!client) {
-    return { success: false, message: 'Supabase client not configured.' };
+  if (client) {
+    const candidates = SECTION_TABLE_MAPPINGS[section];
+    const rows = transformSectionToRows(section, [record]);
+    const result = await smartUpsert(client, candidates, rows);
+    if (result.success) {
+      return {
+        success: true,
+        message: result.message,
+      };
+    }
   }
 
-  const candidates = SECTION_TABLE_MAPPINGS[section];
-  const rows = transformSectionToRows(section, [record]);
-  const result = await smartUpsert(client, candidates, rows);
+  // 2. Fallback via server API proxy
+  if (section === 'contacts') {
+    try {
+      const res = await fetch('/api/contacts/sync-row', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      });
+      if (res.ok) {
+        return { success: true, message: `Contact synced to Supabase via server` };
+      }
+    } catch {
+      // server offline
+    }
+  }
 
-  return {
-    success: result.success,
-    message: result.message,
-  };
+  return { success: false, message: 'Supabase client not configured or unreachable.' };
 }
 
 /**
@@ -529,23 +547,33 @@ export async function deleteSingleRecord(
   section: SyncSectionKey,
   recordId: string
 ): Promise<{ success: boolean; message: string }> {
+  // 1. Try direct browser Supabase client
   const client = await getSupabaseClient();
-  if (!client) {
-    return { success: false, message: 'Supabase client not configured.' };
-  }
-
-  const candidates = SECTION_TABLE_MAPPINGS[section];
-  let lastError = '';
-
-  for (const table of candidates) {
-    const { error } = await client.from(table).delete().eq('id', recordId);
-    if (!error) {
-      return { success: true, message: `Record deleted from ${table}` };
+  if (client) {
+    const candidates = SECTION_TABLE_MAPPINGS[section];
+    for (const table of candidates) {
+      const { error } = await client.from(table).delete().eq('id', recordId);
+      if (!error) {
+        return { success: true, message: `Record deleted from ${table}` };
+      }
     }
-    lastError = error.message;
   }
 
-  return { success: false, message: lastError || 'Failed to delete record' };
+  // 2. Fallback via server API proxy
+  if (section === 'contacts') {
+    try {
+      const res = await fetch(`/api/contacts/${encodeURIComponent(recordId)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        return { success: true, message: 'Record deleted from Supabase via server' };
+      }
+    } catch {
+      // server offline
+    }
+  }
+
+  return { success: false, message: 'Failed to delete record from Supabase' };
 }
 
 /**
@@ -746,6 +774,12 @@ export async function pullVaultFromSupabase(
             remarks: d.remarks || '',
             expiryDate: d.expiry_date || '',
             statusNote: d.status_note || d.expires_soon || '',
+            personTag: d.person_tag || d.persontag || d.person || 'Self',
+            tags: Array.isArray(d.tags)
+              ? d.tags
+              : typeof d.tags === 'string' && d.tags.trim().length > 0
+              ? d.tags.split(',').map((t: string) => t.trim())
+              : [],
           }))
         : INITIAL_VAULT_DATA.documents,
       onlineAccounts: onlineRes.data && onlineRes.data.length > 0

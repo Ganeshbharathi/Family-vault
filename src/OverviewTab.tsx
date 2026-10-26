@@ -69,7 +69,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg transition-colors"
             >
               <FileCheck2 className="w-4 h-4 text-indigo-300" />
-              <span>View 19 Financial Documents</span>
+              <span>View Family Documents ({vault.documents.length})</span>
             </button>
           </div>
         </div>
@@ -367,7 +367,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </p>
             <div className="flex flex-wrap gap-1.5">
               {vault.documents
-                .filter((d) => d.virtualLocation.includes('BHARATHI'))
+                .filter((d) => (d.virtualLocation && d.virtualLocation.includes('BHARATHI')) || (d.personTag === 'Self' && d.tags?.includes('Identity')))
                 .map((d) => (
                   <span
                     key={d.id}

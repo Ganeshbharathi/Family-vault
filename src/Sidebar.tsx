@@ -9,6 +9,8 @@ import {
   Building2,
   KeyRound,
   BookOpen,
+  Trash2,
+  Lock,
 } from 'lucide-react';
 
 import type { TabKey } from './types.ts';
@@ -19,6 +21,7 @@ interface SidebarProps {
   onSelectTab: (tab: TabKey) => void;
   counts: {
     contacts: number;
+    people: number;
     documents: number;
     investments: number;
     insurances: number;
@@ -27,6 +30,7 @@ interface SidebarProps {
     properties: number;
     passwords: number;
     expiringSoonCount: number;
+    trash: number;
   };
   className?: string;
   onCloseMobile?: () => void;
@@ -39,12 +43,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
   className = '',
   onCloseMobile,
 }) => {
-  const navItems: { key: TabKey; label: string; icon: React.ElementType; badge?: number | string; alert?: boolean }[] = [
+  const navItems: {
+    key: TabKey;
+    label: string;
+    icon: React.ElementType;
+    badge?: number | string;
+    alert?: boolean;
+    locked?: boolean;
+  }[] = [
     { key: 'overview', label: 'Overview & Readiness', icon: LayoutDashboard },
     { key: 'contacts', label: 'Family & Contacts', icon: Users, badge: counts.contacts },
     {
+      key: 'people',
+      label: 'People List',
+      icon: Users,
+      badge: counts.people,
+      locked: true,
+    },
+    {
       key: 'documents',
-      label: 'Financial Documents',
+      label: 'Family Documents',
       icon: FileText,
       badge: counts.documents,
       alert: counts.expiringSoonCount > 0,
@@ -55,6 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { key: 'assets_liabilities', label: 'Assets & Liabilities', icon: Building2, badge: counts.properties },
     { key: 'passwords', label: 'Emergency Access & Keys', icon: KeyRound, badge: counts.passwords },
     { key: 'binder', label: 'Printable Family Binder', icon: BookOpen },
+    { key: 'trash', label: 'Trash / Deleted Items', icon: Trash2, badge: counts.trash },
   ];
 
   return (
@@ -85,6 +104,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
 
             <div className="flex items-center gap-1 shrink-0 ml-2">
+              {item.locked && (
+                <span title="Password Protected (ganesh22)">
+                  <Lock className="w-3 h-3 text-amber-500/80" />
+                </span>
+              )}
               {item.alert && (
                 <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded-md">
                   {counts.expiringSoonCount} Expiring

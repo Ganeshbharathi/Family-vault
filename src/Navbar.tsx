@@ -62,7 +62,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
             <div className="flex items-baseline gap-2">
               <span className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap">
-                Valult
+                KutumbVault
               </span>
               <span className="hidden xl:inline text-xs text-slate-500 font-normal">
                 Family Financial & Document Directory

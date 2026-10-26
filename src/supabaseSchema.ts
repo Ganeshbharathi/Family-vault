@@ -183,6 +183,7 @@ export const VAULT_SECTIONS_SPECIFICATION: SectionSpec[] = [
       { name: 'name_on_card', type: 'TEXT', description: 'Cardholder name' },
       { name: 'card_type', type: 'TEXT', description: 'Debit or Credit' },
       { name: 'card_number', type: 'TEXT', description: 'Card number (masked or full)' },
+      { name: 'cardnumber', type: 'TEXT', description: 'Card number alias' },
       { name: 'linked_account', type: 'TEXT', description: 'Linked bank account' },
       { name: 'reg_mobile', type: 'TEXT', description: 'OTP registered mobile' },
       { name: 'valid_till', type: 'TEXT', description: 'Card expiration date' },
@@ -250,12 +251,6 @@ export const VAULT_SECTIONS_SPECIFICATION: SectionSpec[] = [
   },
 ];
 
-// ==============================================================================
-// MASTER REVAMP SQL SCRIPT
-// Cleanly drops old/mismatched tables and creates all 11 tables with exact columns,
-// creates the storage bucket, grants permissions, creates compatibility views,
-// and refreshes the PostgREST schema cache!
-// ==============================================================================
 export const SUPABASE_SQL_SCHEMA = `-- ==============================================================================
 -- KUTUMBVAULT: MASTER DATABASE REVAMP SCRIPT FOR SUPABASE
 -- Run this in your Supabase SQL Editor:
@@ -327,7 +322,6 @@ CREATE TABLE public.financial_documents (
     remarks TEXT DEFAULT '',
     expiry_date TEXT DEFAULT '',
     status_note TEXT DEFAULT '',
-    -- Supabase Storage file attachment metadata
     attachment_id TEXT,
     attachment_file_name TEXT,
     attachment_original_name TEXT,

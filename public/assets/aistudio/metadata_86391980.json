@@ -1,0 +1,6 @@
+{
+  "name": "KutumbVault - Family Financial & Identity Dossier",
+  "description": "An all-in-one secure family financial directory, identity vault, and emergency readiness dashboard to keep your family informed on bank accounts, investments, documents, and key contacts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

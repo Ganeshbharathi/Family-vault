@@ -13,6 +13,7 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 import { ImportantContact, FamilyMember } from './types.ts';
 
@@ -20,11 +21,16 @@ interface ContactsTabProps {
   familyMembers: FamilyMember[];
   contacts: ImportantContact[];
   onUpdateContact: (contact: ImportantContact) => void;
+  onCommitContact?: (contact: ImportantContact) => void;
   onAddContact: (contact: Omit<ImportantContact, 'id'>) => void;
   onDeleteContact: (id: string) => void;
   onUpdateFamilyMember: (member: FamilyMember) => void;
+  onCommitFamilyMember?: (member: FamilyMember) => void;
   onAddFamilyMember: (member: Omit<FamilyMember, 'id'>) => void;
   onDeleteFamilyMember: (id: string) => void;
+  syncStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  lastSavedTime?: string;
+  supabaseConnected?: boolean;
 }
 
 const DEFAULT_HEADERS: Record<string, string> = {
@@ -38,6 +44,29 @@ const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 const HEADERS_STORAGE_KEY = 'vault_contacts_custom_headers_v1';
+
+// Default and minimum column widths (in pixels) for draggable resizing
+const DEFAULT_COL_WIDTHS: Record<string, number> = {
+  srNo: 64,
+  particulars: 180,
+  name: 195,
+  dob: 215,
+  mobile: 245,
+  email: 215,
+  remarks: 245,
+};
+
+const MIN_COL_WIDTHS: Record<string, number> = {
+  srNo: 48,
+  particulars: 110,
+  name: 120,
+  dob: 140,
+  mobile: 150,
+  email: 130,
+  remarks: 130,
+};
+
+const COL_WIDTHS_STORAGE_KEY = 'vault_contacts_column_widths_v2';
 
 /**
  * Calculates current running age accurately from a date string (YYYY-MM-DD or parseable format)
@@ -297,11 +326,16 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
   familyMembers,
   contacts,
   onUpdateContact,
+  onCommitContact,
   onAddContact,
   onDeleteContact,
   onUpdateFamilyMember,
+  onCommitFamilyMember,
   onAddFamilyMember,
   onDeleteFamilyMember,
+  syncStatus = 'idle',
+  lastSavedTime,
+  supabaseConnected = false,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -319,9 +353,23 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
   const [editingHeaderKey, setEditingHeaderKey] = useState<string | null>(null);
   const [headerDraft, setHeaderDraft] = useState('');
 
-  // Mobile addition state
+  // Column Widths for Draggable Resizing
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(COL_WIDTHS_STORAGE_KEY);
+      if (saved) return { ...DEFAULT_COL_WIDTHS, ...JSON.parse(saved) };
+    } catch {
+      // fallback
+    }
+    return DEFAULT_COL_WIDTHS;
+  });
+  const [resizingCol, setResizingCol] = useState<string | null>(null);
+
+  // Mobile addition and editing state
   const [addingPhoneForId, setAddingPhoneForId] = useState<string | null>(null);
   const [newPhoneDraft, setNewPhoneDraft] = useState('');
+  const [editingPhoneIndex, setEditingPhoneIndex] = useState<{ contactId: string; index: number } | null>(null);
+  const [editingPhoneDraft, setEditingPhoneDraft] = useState('');
 
   // Dropdown interactive calendar state (safe for cross-origin iframes)
   const [openCalendarId, setOpenCalendarId] = useState<string | null>(null);
@@ -349,6 +397,66 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
     }
   };
 
+  // Draggable Column Resizing Handlers
+  const handleResizeMouseDown = (colKey: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startWidth = colWidths[colKey] || DEFAULT_COL_WIDTHS[colKey];
+    const minWidth = MIN_COL_WIDTHS[colKey] || 48;
+
+    setResizingCol(colKey);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const newWidth = Math.max(minWidth, Math.round(startWidth + delta));
+      setColWidths((prev) => ({
+        ...prev,
+        [colKey]: newWidth,
+      }));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResizingCol(null);
+      setColWidths((current) => {
+        try {
+          localStorage.setItem(COL_WIDTHS_STORAGE_KEY, JSON.stringify(current));
+        } catch {
+          // ignore
+        }
+        return current;
+      });
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleResetColWidth = (colKey: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setColWidths((prev) => {
+      const updated = { ...prev, [colKey]: DEFAULT_COL_WIDTHS[colKey] };
+      try {
+        localStorage.setItem(COL_WIDTHS_STORAGE_KEY, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const handleResetAllColWidths = () => {
+    setColWidths(DEFAULT_COL_WIDTHS);
+    try {
+      localStorage.setItem(COL_WIDTHS_STORAGE_KEY, JSON.stringify(DEFAULT_COL_WIDTHS));
+    } catch {}
+  };
+
   const handleInlineChange = (contact: ImportantContact, field: keyof ImportantContact, value: any) => {
     onUpdateContact({
       ...contact,
@@ -356,7 +464,11 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
     });
   };
 
-  // Add multiple phones to a contact
+  const handleBlurContact = (contact: ImportantContact) => {
+    onCommitContact?.(contact);
+  };
+
+  // Add multiple phones to a contact seamlessly
   const handleAddPhone = (contact: ImportantContact) => {
     const trimmed = newPhoneDraft.trim();
     if (!trimmed) {
@@ -364,27 +476,60 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
       return;
     }
 
+    const newNumbers = trimmed
+      .split(/[\/\n,;]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
     const existingPhones = contact.mobile
-      ? contact.mobile.split(/[\/\n,]+/).map((p) => p.trim()).filter(Boolean)
+      ? contact.mobile.split(/[\/\n,;]+/).map((p) => p.trim()).filter(Boolean)
       : [];
 
-    if (!existingPhones.includes(trimmed)) {
-      existingPhones.push(trimmed);
+    for (const num of newNumbers) {
+      if (!existingPhones.includes(num)) {
+        existingPhones.push(num);
+      }
     }
 
     const updatedMobile = existingPhones.join(' / ');
+    const updated = { ...contact, mobile: updatedMobile };
     handleInlineChange(contact, 'mobile', updatedMobile);
+    onCommitContact?.(updated);
     setNewPhoneDraft('');
     setAddingPhoneForId(null);
   };
 
+  // Edit existing phone number in place
+  const handleSaveEditedPhone = (contact: ImportantContact, idxToEdit: number) => {
+    const trimmed = editingPhoneDraft.trim();
+    const existingPhones = contact.mobile
+      ? contact.mobile.split(/[\/\n,;]+/).map((p) => p.trim()).filter(Boolean)
+      : [];
+
+    if (trimmed) {
+      existingPhones[idxToEdit] = trimmed;
+    } else {
+      existingPhones.splice(idxToEdit, 1);
+    }
+
+    const updatedMobile = existingPhones.join(' / ');
+    const updated = { ...contact, mobile: updatedMobile };
+    handleInlineChange(contact, 'mobile', updatedMobile);
+    onCommitContact?.(updated);
+    setEditingPhoneIndex(null);
+    setEditingPhoneDraft('');
+  };
+
   const handleRemovePhone = (contact: ImportantContact, phoneToRemove: string) => {
     const existingPhones = contact.mobile
-      ? contact.mobile.split(/[\/\n,]+/).map((p) => p.trim()).filter(Boolean)
+      ? contact.mobile.split(/[\/\n,;]+/).map((p) => p.trim()).filter(Boolean)
       : [];
 
     const filtered = existingPhones.filter((p) => p !== phoneToRemove);
-    handleInlineChange(contact, 'mobile', filtered.join(' / '));
+    const updatedMobile = filtered.join(' / ');
+    const updated = { ...contact, mobile: updatedMobile };
+    handleInlineChange(contact, 'mobile', updatedMobile);
+    onCommitContact?.(updated);
   };
 
   const handleQuickAddRow = () => {
@@ -406,18 +551,46 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
       {/* Header and Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Users className="w-5 h-5 text-indigo-600" />
-            Family Members & Contacts Directory
-          </h1>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              <Users className="w-5 h-5 text-indigo-600" />
+              Family Members & Contacts Directory
+            </h1>
+            {/* Live Supabase Sync Status Indicator Badge */}
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-100 border border-slate-200/80">
+              {syncStatus === 'saving' ? (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  </span>
+                  <span className="text-amber-700 font-semibold">Syncing to Supabase...</span>
+                </>
+              ) : syncStatus === 'saved' ? (
+                <>
+                  <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                  <span className="text-emerald-700 font-semibold">
+                    Supabase Synced {lastSavedTime ? `(${lastSavedTime})` : ''}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className={`h-2 w-2 rounded-full ${supabaseConnected ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+                  <span className="text-slate-600">
+                    {supabaseConnected ? 'Supabase Live Sync Connected' : 'Supabase Ready'}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
           <p className="text-xs text-slate-500 mt-1">
-            All fields are editable directly in the table. Changes auto-save in real-time.
+            All fields are editable directly in the table. Changes auto-update immediately to Supabase database.
           </p>
         </div>
         <button
           type="button"
           onClick={handleQuickAddRow}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs self-start sm:self-auto"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-2xs self-start sm:self-auto shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span>Add New Contact Row</span>
@@ -450,6 +623,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                       type="text"
                       value={m.name}
                       onChange={(e) => onUpdateFamilyMember({ ...m, name: e.target.value })}
+                      onBlur={() => onCommitFamilyMember?.(m)}
                       placeholder="Enter Full Name"
                       className="w-full text-xs font-bold text-slate-900 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                     />
@@ -458,6 +632,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                     type="text"
                     value={m.relationship}
                     onChange={(e) => onUpdateFamilyMember({ ...m, relationship: e.target.value })}
+                    onBlur={() => onCommitFamilyMember?.(m)}
                     placeholder="Relationship"
                     className="w-full text-[11px] text-slate-500 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                   />
@@ -465,6 +640,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                     type="text"
                     value={m.notes || ''}
                     onChange={(e) => onUpdateFamilyMember({ ...m, notes: e.target.value })}
+                    onBlur={() => onCommitFamilyMember?.(m)}
                     placeholder="Notes or nominee hints"
                     className="w-full text-[10.5px] text-slate-400 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                   />
@@ -507,6 +683,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                       type="text"
                       value={m.name}
                       onChange={(e) => onUpdateFamilyMember({ ...m, name: e.target.value })}
+                      onBlur={() => onCommitFamilyMember?.(m)}
                       placeholder="Child Name"
                       className="w-full text-xs font-bold text-slate-900 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-emerald-500 rounded px-1.5 py-0.5"
                     />
@@ -523,6 +700,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                     type="text"
                     value={m.relationship}
                     onChange={(e) => onUpdateFamilyMember({ ...m, relationship: e.target.value })}
+                    onBlur={() => onCommitFamilyMember?.(m)}
                     placeholder="e.g. Son (Minor)"
                     className="w-full text-[11px] text-slate-500 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-emerald-500 rounded px-1.5 py-0.5"
                   />
@@ -561,6 +739,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                       type="text"
                       value={m.name}
                       onChange={(e) => onUpdateFamilyMember({ ...m, name: e.target.value })}
+                      onBlur={() => onCommitFamilyMember?.(m)}
                       placeholder="Parent Name"
                       className="w-full text-xs font-bold text-slate-900 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                     />
@@ -577,6 +756,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                     type="text"
                     value={m.relationship}
                     onChange={(e) => onUpdateFamilyMember({ ...m, relationship: e.target.value })}
+                    onBlur={() => onCommitFamilyMember?.(m)}
                     placeholder="e.g. Dependent Parent (MOM)"
                     className="w-full text-[11px] text-slate-500 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                   />
@@ -584,6 +764,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                     type="text"
                     value={m.notes || ''}
                     onChange={(e) => onUpdateFamilyMember({ ...m, notes: e.target.value })}
+                    onBlur={() => onCommitFamilyMember?.(m)}
                     placeholder="Emergency notes"
                     className="w-full text-[10.5px] text-slate-400 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                   />
@@ -594,40 +775,78 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
         </div>
       </div>
 
-      {/* Main Full-Width Contacts Table (Action column removed, All fields inline editable) */}
+      {/* Main Full-Width Contacts Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs w-full">
         <div className="p-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-sm font-bold text-slate-900">
               Important Contacts Directory ({contacts.length} entries)
             </h2>
-            <span className="text-[11px] text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
-              Hover column headers to rename
+            <span className="text-[11px] text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200 hidden sm:inline-flex">
+              Drag column borders to resize | Hover headers to rename
             </span>
           </div>
-          <button
-            type="button"
-            onClick={handleQuickAddRow}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Row</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleResetAllColWidths}
+              title="Reset all column widths to default"
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors"
+            >
+              <RotateCcw className="w-3 h-3 text-slate-500" />
+              <span>Reset Columns</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleQuickAddRow}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Row</span>
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto w-full">
-          <table className="w-full text-left border-collapse table-auto">
+          <table
+            className="text-left border-collapse table-fixed w-full"
+            style={{ minWidth: `${Math.max(880, Object.values(colWidths).reduce((a, b) => a + b, 0))}px` }}
+          >
+            <colgroup>
+              <col style={{ width: `${colWidths.srNo}px` }} />
+              <col style={{ width: `${colWidths.particulars}px` }} />
+              <col style={{ width: `${colWidths.name}px` }} />
+              <col style={{ width: `${colWidths.dob}px` }} />
+              <col style={{ width: `${colWidths.mobile}px` }} />
+              <col style={{ width: `${colWidths.email}px` }} />
+              <col style={{ width: `${colWidths.remarks}px` }} />
+            </colgroup>
             <thead>
-              <tr className="bg-slate-100/80 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-600 font-bold select-none">
+              <tr className="bg-slate-100/90 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-600 font-bold select-none">
                 {/* 1. Sr. No */}
-                <th className="py-2.5 px-3 w-14 text-center group relative">
+                <th className="py-2.5 px-3 text-center relative group">
                   <div className="flex items-center justify-center gap-1">
                     <span>{headers.srNo}</span>
+                  </div>
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('srNo', e)}
+                    onDoubleClick={(e) => handleResetColWidth('srNo', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'srNo' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'srNo' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
                   </div>
                 </th>
 
                 {/* 2. Particulars / Role */}
-                <th className="py-2.5 px-3 min-w-[150px] group relative">
+                <th className="py-2.5 px-3 relative group">
                   {editingHeaderKey === 'particulars' ? (
                     <input
                       type="text"
@@ -641,17 +860,32 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                   ) : (
                     <div
                       onClick={() => handleStartEditHeader('particulars')}
-                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors"
+                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors pr-2"
                       title="Click to rename column header"
                     >
-                      <span>{headers.particulars}</span>
-                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1" />
+                      <span className="truncate">{headers.particulars}</span>
+                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1 shrink-0" />
                     </div>
                   )}
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('particulars', e)}
+                    onDoubleClick={(e) => handleResetColWidth('particulars', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'particulars' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'particulars' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
+                  </div>
                 </th>
 
                 {/* 3. Contact Name */}
-                <th className="py-2.5 px-3 min-w-[160px] group relative">
+                <th className="py-2.5 px-3 relative group">
                   {editingHeaderKey === 'name' ? (
                     <input
                       type="text"
@@ -665,17 +899,32 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                   ) : (
                     <div
                       onClick={() => handleStartEditHeader('name')}
-                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors"
+                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors pr-2"
                       title="Click to rename column header"
                     >
-                      <span>{headers.name}</span>
-                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1" />
+                      <span className="truncate">{headers.name}</span>
+                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1 shrink-0" />
                     </div>
                   )}
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('name', e)}
+                    onDoubleClick={(e) => handleResetColWidth('name', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'name' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'name' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
+                  </div>
                 </th>
 
                 {/* 4. Date of Birth & Age */}
-                <th className="py-2.5 px-3 min-w-[190px] group relative">
+                <th className="py-2.5 px-3 relative group">
                   {editingHeaderKey === 'dob' ? (
                     <input
                       type="text"
@@ -689,17 +938,32 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                   ) : (
                     <div
                       onClick={() => handleStartEditHeader('dob')}
-                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors"
+                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors pr-2"
                       title="Click to rename column header"
                     >
-                      <span>{headers.dob}</span>
-                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1" />
+                      <span className="truncate">{headers.dob}</span>
+                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1 shrink-0" />
                     </div>
                   )}
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('dob', e)}
+                    onDoubleClick={(e) => handleResetColWidth('dob', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'dob' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'dob' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
+                  </div>
                 </th>
 
                 {/* 5. Mobile Numbers */}
-                <th className="py-2.5 px-3 min-w-[210px] group relative">
+                <th className="py-2.5 px-3 relative group">
                   {editingHeaderKey === 'mobile' ? (
                     <input
                       type="text"
@@ -713,17 +977,32 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                   ) : (
                     <div
                       onClick={() => handleStartEditHeader('mobile')}
-                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors"
+                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors pr-2"
                       title="Click to rename column header"
                     >
-                      <span>{headers.mobile}</span>
-                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1" />
+                      <span className="truncate">{headers.mobile}</span>
+                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1 shrink-0" />
                     </div>
                   )}
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('mobile', e)}
+                    onDoubleClick={(e) => handleResetColWidth('mobile', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'mobile' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'mobile' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
+                  </div>
                 </th>
 
                 {/* 6. Email */}
-                <th className="py-2.5 px-3 min-w-[170px] group relative">
+                <th className="py-2.5 px-3 relative group">
                   {editingHeaderKey === 'email' ? (
                     <input
                       type="text"
@@ -737,17 +1016,32 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                   ) : (
                     <div
                       onClick={() => handleStartEditHeader('email')}
-                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors"
+                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors pr-2"
                       title="Click to rename column header"
                     >
-                      <span>{headers.email}</span>
-                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1" />
+                      <span className="truncate">{headers.email}</span>
+                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1 shrink-0" />
                     </div>
                   )}
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('email', e)}
+                    onDoubleClick={(e) => handleResetColWidth('email', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'email' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'email' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
+                  </div>
                 </th>
 
                 {/* 7. Remarks */}
-                <th className="py-2.5 px-3 min-w-[180px] group relative">
+                <th className="py-2.5 px-3 relative group">
                   {editingHeaderKey === 'remarks' ? (
                     <input
                       type="text"
@@ -761,13 +1055,28 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                   ) : (
                     <div
                       onClick={() => handleStartEditHeader('remarks')}
-                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors"
+                      className="cursor-pointer flex items-center justify-between hover:text-indigo-700 transition-colors pr-2"
                       title="Click to rename column header"
                     >
-                      <span>{headers.remarks}</span>
-                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1" />
+                      <span className="truncate">{headers.remarks}</span>
+                      <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity ml-1 shrink-0" />
                     </div>
                   )}
+                  {/* Resize Divider */}
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown('remarks', e)}
+                    onDoubleClick={(e) => handleResetColWidth('remarks', e)}
+                    title="Drag to resize column (double-click to reset)"
+                    className={`absolute top-0 right-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-center z-20 select-none group/resize ${
+                      resizingCol === 'remarks' ? 'bg-indigo-500/20' : 'hover:bg-indigo-300/40'
+                    }`}
+                  >
+                    <div
+                      className={`w-[1.5px] h-3.5 rounded-full ${
+                        resizingCol === 'remarks' ? 'bg-indigo-600' : 'bg-slate-300 group-hover/resize:bg-indigo-500'
+                      }`}
+                    />
+                  </div>
                 </th>
               </tr>
             </thead>
@@ -808,19 +1117,10 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                           type="text"
                           value={contact.particulars}
                           onChange={(e) => handleInlineChange(contact, 'particulars', e.target.value)}
+                          onBlur={() => handleBlurContact(contact)}
                           placeholder="e.g. Self, Spouse, MOM, Doctor"
                           className="w-full px-2 py-1 text-xs font-bold text-slate-900 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded transition-colors"
                         />
-                        {contact.particulars === 'Self' && (
-                          <span className="inline-block mt-0.5 ml-2 text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded font-medium border border-indigo-100">
-                            Primary Account Owner
-                          </span>
-                        )}
-                        {contact.particulars === 'MOM' && (
-                          <span className="inline-block mt-0.5 ml-2 text-[10px] text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded font-medium border border-rose-100">
-                            Primary Nominee
-                          </span>
-                        )}
                       </div>
                     </td>
 
@@ -830,6 +1130,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                         type="text"
                         value={contact.name}
                         onChange={(e) => handleInlineChange(contact, 'name', e.target.value)}
+                        onBlur={() => handleBlurContact(contact)}
                         placeholder="Enter full name"
                         className="w-full px-2 py-1 text-xs font-semibold text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded transition-colors"
                       />
@@ -843,6 +1144,7 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                             type="text"
                             value={contact.dob || ''}
                             onChange={(e) => handleInlineChange(contact, 'dob', e.target.value)}
+                            onBlur={() => handleBlurContact(contact)}
                             placeholder="YYYY-MM-DD"
                             className="w-full pl-2 pr-7 py-1 text-xs font-mono text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded transition-colors"
                           />
@@ -860,17 +1162,19 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                             <Calendar className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Safe Dropdown Calendar Picker (No iframe SecurityError) */}
                           {openCalendarId === contact.id && (
                             <DatePickerDropdown
                               value={contact.dob || ''}
-                              onChange={(val) => handleInlineChange(contact, 'dob', val)}
+                              onChange={(val) => {
+                                const updated = { ...contact, dob: val };
+                                handleInlineChange(contact, 'dob', val);
+                                onCommitContact?.(updated);
+                              }}
                               onClose={() => setOpenCalendarId(null)}
                             />
                           )}
                         </div>
 
-                        {/* Calculated Running Age */}
                         {ageInfo ? (
                           <span
                             className="shrink-0 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs whitespace-nowrap"
@@ -884,115 +1188,182 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                       </div>
                     </td>
 
-                    {/* 5. Mobile Numbers (Multiple Additions, Click-to-Call, Copy & Delete) */}
+                    {/* 5. Mobile Numbers */}
                     <td className="py-2 px-3">
-                      <div className="space-y-1.5">
-                        {/* List of existing numbers */}
-                        {phoneList.map((phone, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100/80 px-2 py-0.5 rounded-md border border-slate-200 text-xs font-mono group/phone"
-                          >
-                            <a
-                              href={`tel:${phone}`}
-                              className="text-slate-800 hover:text-indigo-600 font-semibold truncate flex items-center gap-1"
-                              title="Click to call"
-                            >
-                              <PhoneCall className="w-3 h-3 text-slate-400" />
-                              <span>{phone}</span>
-                            </a>
-                            <div className="ml-auto flex items-center gap-0.5">
-                              <button
-                                type="button"
-                                onClick={() => handleCopy(phone, `${contact.id}-${idx}`)}
-                                className="p-0.5 text-slate-400 hover:text-slate-700 rounded"
-                                title="Copy number"
-                              >
-                                {copiedId === `${contact.id}-${idx}` ? (
-                                  <Check className="w-3 h-3 text-emerald-600" />
-                                ) : (
-                                  <Copy className="w-3 h-3" />
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRemovePhone(contact, phone)}
-                                className="p-0.5 text-slate-300 hover:text-rose-600 opacity-0 group-hover/phone:opacity-100 transition-opacity"
-                                title="Remove number"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                      <div className="space-y-1.5 w-full">
+                        {/* List of existing phone badges */}
+                        {phoneList.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {phoneList.map((phone, idx) => {
+                              const isEditingThis =
+                                editingPhoneIndex?.contactId === contact.id &&
+                                editingPhoneIndex?.index === idx;
 
-                        {/* Multiple phone addition input / button */}
+                              if (isEditingThis) {
+                                return (
+                                  <div key={idx} className="flex items-center gap-1 w-full max-w-[200px]">
+                                    <input
+                                      type="tel"
+                                      autoFocus
+                                      value={editingPhoneDraft}
+                                      onChange={(e) => setEditingPhoneDraft(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.preventDefault();
+                                          handleSaveEditedPhone(contact, idx);
+                                        } else if (e.key === 'Escape') {
+                                          setEditingPhoneIndex(null);
+                                        }
+                                      }}
+                                      onBlur={() => handleSaveEditedPhone(contact, idx)}
+                                      className="w-full text-xs font-mono px-2 py-0.5 bg-white border border-indigo-500 rounded outline-none shadow-2xs"
+                                    />
+                                    <button
+                                      type="button"
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={() => handleSaveEditedPhone(contact, idx)}
+                                      className="px-2 py-0.5 text-[10px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shrink-0"
+                                    >
+                                      Save
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div
+                                  key={idx}
+                                  className="inline-flex items-center gap-1 bg-slate-50 hover:bg-slate-100/90 px-2 py-0.5 rounded-md border border-slate-200 text-xs font-mono group/phone"
+                                >
+                                  <a
+                                    href={`tel:${phone}`}
+                                    className="text-slate-800 hover:text-indigo-600 font-semibold truncate flex items-center gap-1"
+                                    title="Click to call"
+                                  >
+                                    <PhoneCall className="w-3 h-3 text-slate-400" />
+                                    <span>{phone}</span>
+                                  </a>
+                                  <div className="flex items-center gap-0.5 ml-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingPhoneIndex({ contactId: contact.id, index: idx });
+                                        setEditingPhoneDraft(phone);
+                                      }}
+                                      className="p-0.5 text-slate-400 hover:text-indigo-600 rounded opacity-0 group-hover/phone:opacity-100 transition-opacity"
+                                      title="Edit number"
+                                    >
+                                      <Pencil className="w-2.5 h-2.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopy(phone, `${contact.id}-${idx}`)}
+                                      className="p-0.5 text-slate-400 hover:text-slate-700 rounded"
+                                      title="Copy number"
+                                    >
+                                      {copiedId === `${contact.id}-${idx}` ? (
+                                        <Check className="w-3 h-3 text-emerald-600" />
+                                      ) : (
+                                        <Copy className="w-3 h-3" />
+                                      )}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemovePhone(contact, phone)}
+                                      className="p-0.5 text-slate-300 hover:text-rose-600 opacity-0 group-hover/phone:opacity-100 transition-opacity"
+                                      title="Remove number"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Active Add Phone Input if opened */}
                         {addingPhoneForId === contact.id ? (
-                          <div className="flex items-center gap-1 pt-0.5">
+                          <div className="flex items-center gap-1 pt-0.5 w-full">
                             <input
-                              type="text"
+                              type="tel"
                               autoFocus
                               value={newPhoneDraft}
                               onChange={(e) => setNewPhoneDraft(e.target.value)}
                               placeholder="e.g. 9876543210"
                               onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleAddPhone(contact);
-                                if (e.key === 'Escape') setAddingPhoneForId(null);
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleAddPhone(contact);
+                                }
+                                if (e.key === 'Escape') {
+                                  setAddingPhoneForId(null);
+                                  setNewPhoneDraft('');
+                                }
                               }}
-                              className="w-full text-xs font-mono px-2 py-1 bg-white border border-indigo-400 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              onBlur={(e) => {
+                                const related = e.relatedTarget as HTMLElement | null;
+                                if (related && related.closest('.phone-action-btn')) return;
+                                if (newPhoneDraft.trim()) {
+                                  handleAddPhone(contact);
+                                } else {
+                                  setAddingPhoneForId(null);
+                                }
+                              }}
+                              className="w-full text-xs font-mono px-2 py-1 bg-white border border-indigo-500 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 shadow-2xs"
                             />
                             <button
                               type="button"
+                              onMouseDown={(e) => e.preventDefault()}
                               onClick={() => handleAddPhone(contact)}
-                              className="px-2 py-1 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shrink-0"
+                              className="phone-action-btn px-2.5 py-1 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shrink-0"
                             >
                               Add
                             </button>
                             <button
                               type="button"
+                              onMouseDown={(e) => e.preventDefault()}
                               onClick={() => {
                                 setAddingPhoneForId(null);
                                 setNewPhoneDraft('');
                               }}
-                              className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                              className="phone-action-btn p-1 text-slate-400 hover:text-slate-600 rounded"
+                              title="Cancel"
                             >
                               <X className="w-3 h-3" />
                             </button>
                           </div>
                         ) : (
                           <div className="flex items-center gap-2">
-                            {phoneList.length === 0 && (
-                              <input
-                                type="text"
-                                value={contact.mobile}
-                                onChange={(e) => handleInlineChange(contact, 'mobile', e.target.value)}
-                                placeholder="Enter mobile number"
-                                className="w-full px-2 py-1 text-xs font-mono text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 rounded"
-                              />
-                            )}
                             <button
                               type="button"
                               onClick={() => {
                                 setAddingPhoneForId(contact.id);
                                 setNewPhoneDraft('');
                               }}
-                              className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50/60 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200/70 transition-colors whitespace-nowrap"
+                              className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50/70 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200/80 transition-colors whitespace-nowrap"
                             >
                               <Plus className="w-3 h-3" />
-                              <span>{phoneList.length > 0 ? '+ Add Number' : '+ Mobile'}</span>
+                              <span>Add</span>
                             </button>
+                            {phoneList.length === 0 && (
+                              <span className="text-[11px] text-slate-300 italic select-none">
+                                —
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
                     </td>
 
-                    {/* 6. Email (Inline Editable) */}
+                    {/* 6. Email */}
                     <td className="py-2 px-3">
                       <div className="flex items-center gap-1.5">
                         <input
                           type="email"
                           value={contact.email}
                           onChange={(e) => handleInlineChange(contact, 'email', e.target.value)}
+                          onBlur={() => handleBlurContact(contact)}
                           placeholder="e.g. name@gmail.com"
                           className="w-full px-2 py-1 text-xs text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded transition-colors"
                         />
@@ -1008,12 +1379,13 @@ export const ContactsTab: React.FC<ContactsTabProps> = ({
                       </div>
                     </td>
 
-                    {/* 7. Remarks / Address (Inline Editable) */}
+                    {/* 7. Remarks / Address */}
                     <td className="py-2 px-3">
                       <input
                         type="text"
                         value={contact.remarks || ''}
                         onChange={(e) => handleInlineChange(contact, 'remarks', e.target.value)}
+                        onBlur={() => handleBlurContact(contact)}
                         placeholder="Add notes, relationship or address"
                         className="w-full px-2 py-1 text-xs text-slate-700 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded transition-colors"
                       />
